@@ -1,0 +1,2 @@
+# SaveToA is deliberately shipped as a self-contained Go executable.
+savetoa: statically-linked-binary [usr/bin/savetoa]

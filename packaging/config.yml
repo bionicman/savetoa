@@ -1,0 +1,7 @@
+# SaveToA configuration file.
+#
+# Package installation deliberately defines no runnable targets. See
+# /usr/share/doc/savetoa/examples/config.example.yml for a complete example.
+config_version: 1
+targets: {}
+groups: {}

@@ -1,0 +1,50 @@
+config_version: 1
+
+targets:
+  example-mariadb:
+    driver: mariadb
+
+    credentials:
+      file: /etc/savetoa/credentials.d/example-mariadb.yml
+
+    source:
+      socket: /run/mysqld/mysqld.sock
+      replica:
+        required: true
+        max_lag: 5m
+
+    capture:
+      prepare: true
+      safe_replica_backup: true
+      use_memory: 512M
+
+    compression:
+      driver: zstd
+      level: 3
+
+    encryption:
+      driver: age
+      recipients_file: /etc/savetoa/recipients.d/production.age
+
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+
+      offsite:
+        driver: s3
+        credentials:
+          file: /etc/savetoa/credentials.d/offsite-s3.yml
+        endpoint: https://s3.example.invalid
+        bucket: example-backups
+        prefix: databases
+
+    retention:
+      keep_daily: 14
+      keep_weekly: 8
+      keep_monthly: 12
+
+groups:
+  example-databases:
+    targets:
+      - example-mariadb

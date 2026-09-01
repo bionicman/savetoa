@@ -1,0 +1,71 @@
+.TH SAVETOA 1 "September 2026" "savetoa 0.1.0" "User Commands"
+.SH NAME
+savetoa \- job-driven backup orchestrator
+.SH SYNOPSIS
+.B savetoa
+.RI [ \-\-config " path" ]
+.I command
+.RI [ arguments ]
+.PP
+.B savetoa
+.B \-\-version
+.SH DESCRIPTION
+SaveToA coordinates named backup targets. A target selects a capture driver,
+source settings and credentials, transformations, destinations, and retention
+policy.
+.PP
+This release is an implementation scaffold. Commands that would capture,
+delete, verify, or restore data fail explicitly until implemented.
+.SH OPTIONS
+.TP
+.BI \-\-config " path"
+Read configuration from
+.I path
+instead of
+.IR /etc/savetoa/config.yml .
+.TP
+.B \-\-version
+Print version information and exit.
+.SH COMMANDS
+.TP
+.BI run " target"
+Capture and deliver one configured target.
+.TP
+.BI run-group " group"
+Run a configured group of targets.
+.TP
+.B list
+List completed backup sets.
+.TP
+.BI verify " backup-id"
+Verify a completed backup set.
+.TP
+.BI restore " backup-id"
+Materialize a backup into an explicit restore destination.
+.TP
+.BI prune " target"
+Apply the configured retention policy to completed backup sets.
+.TP
+.BI doctor " target"
+Validate a target and its dependencies without capturing data.
+.SH FILES
+.TP
+.I /etc/savetoa/config.yml
+System-wide target configuration.
+.TP
+.I /etc/savetoa/credentials.d/
+Protected source and destination credential files.
+.TP
+.I /etc/savetoa/recipients.d/
+Client-side encryption recipients.
+.TP
+.I /var/lib/savetoa/
+Persistent state, work directories, and delivery spool.
+.TP
+.I /var/backups/savetoa/
+Default local backup destination.
+.SH SEE ALSO
+.BR systemd.service (5),
+.BR systemd.timer (5)
+.SH BUGS
+Report bugs at https://github.com/bionicman/savetoa/issues.

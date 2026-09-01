@@ -1,0 +1,7 @@
+d /etc/savetoa/credentials.d 0750 root savetoa -
+d /etc/savetoa/recipients.d 0750 root savetoa -
+d /var/lib/savetoa 0750 savetoa savetoa -
+d /var/lib/savetoa/work 0750 savetoa savetoa -
+d /var/lib/savetoa/spool 0750 savetoa savetoa -
+d /var/backups/savetoa 0750 savetoa savetoa -
+d /run/savetoa 0750 savetoa savetoa -

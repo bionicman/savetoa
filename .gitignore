@@ -1,0 +1,10 @@
+/build/
+/dist/
+*.deb
+*.build
+*.buildinfo
+*.changes
+*.dsc
+*.tar.*
+.idea/
+.vscode/

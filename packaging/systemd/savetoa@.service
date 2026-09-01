@@ -1,0 +1,27 @@
+[Unit]
+Description=SaveToA backup target %i
+Documentation=https://github.com/bionicman/savetoa
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=savetoa
+Group=savetoa
+ExecStart=/usr/bin/savetoa --config /etc/savetoa/config.yml run %i
+ConfigurationDirectory=savetoa
+StateDirectory=savetoa
+RuntimeDirectory=savetoa
+UMask=0077
+
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadOnlyPaths=/etc/savetoa
+ReadWritePaths=/var/backups/savetoa
