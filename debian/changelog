@@ -1,3 +1,39 @@
+savetoa (0.1.0-7) unstable; urgency=medium
+
+  * Add immutable, idempotent S3 delivery from the durable spool.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Wed, 02 Sep 2026 18:30:00 +0000
+
+savetoa (0.1.0-6) unstable; urgency=medium
+
+  * Ignore incomplete sets and verify restore payloads on one descriptor.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Wed, 02 Sep 2026 15:15:00 +0000
+
+savetoa (0.1.0-5) unstable; urgency=medium
+
+  * Add verified, explicit and traversal-safe local restore materialization.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Wed, 02 Sep 2026 13:00:00 +0000
+
+savetoa (0.1.0-4) unstable; urgency=medium
+
+  * Add safe MariaDB capture, preparation and verified local delivery.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Wed, 02 Sep 2026 11:30:00 +0000
+
+savetoa (0.1.0-3) unstable; urgency=medium
+
+  * Preserve MariaDB vertical status field names during health checks.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Wed, 02 Sep 2026 01:10:00 +0000
+
+savetoa (0.1.0-2) unstable; urgency=medium
+
+  * Add read-only MariaDB replica health checks.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Wed, 02 Sep 2026 01:00:00 +0000
+
 savetoa (0.1.0-1) unstable; urgency=medium
 
   * Initial package scaffold.

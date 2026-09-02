@@ -17,9 +17,60 @@ import (
 
 const (
 	MaxRecipientsFileSize = 64 << 10
+	MaxIdentitiesFileSize = 64 << 10
 	MaxRecipients         = 100
 	maxRecipientLineSize  = 1024
 )
+
+func ParseIdentities(reader io.Reader) ([]age.Identity, error) {
+	if reader == nil {
+		return nil, errors.New("identity reader is required")
+	}
+	data, err := io.ReadAll(io.LimitReader(reader, MaxIdentitiesFileSize+1))
+	if err != nil {
+		return nil, errors.New("read age identity file")
+	}
+	if len(data) > MaxIdentitiesFileSize {
+		return nil, fmt.Errorf("age identity file exceeds %d bytes", MaxIdentitiesFileSize)
+	}
+
+	identities := make([]age.Identity, 0, 1)
+	for _, rawLine := range bytes.Split(data, []byte{'\n'}) {
+		line := strings.TrimSpace(strings.TrimSuffix(string(rawLine), "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		identity, err := age.ParseX25519Identity(line)
+		if err != nil {
+			return nil, errors.New("age identity file contains an invalid X25519 identity")
+		}
+		identities = append(identities, identity)
+	}
+	if len(identities) == 0 {
+		return nil, errors.New("age identity file contains no X25519 identities")
+	}
+	return identities, nil
+}
+
+func DecryptReader(ctx context.Context, ciphertext io.Reader, identities []age.Identity) (io.Reader, error) {
+	if ctx == nil {
+		return nil, errors.New("context is required")
+	}
+	if ciphertext == nil {
+		return nil, errors.New("ciphertext reader is required")
+	}
+	if len(identities) == 0 {
+		return nil, errors.New("at least one age identity is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("decrypt payload: %w", err)
+	}
+	plaintext, err := age.Decrypt(&contextReader{ctx: ctx, reader: ciphertext}, identities...)
+	if err != nil {
+		return nil, errors.New("decrypt age payload")
+	}
+	return plaintext, nil
+}
 
 type Encryptor struct {
 	recipients   []age.Recipient

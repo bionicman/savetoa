@@ -14,11 +14,15 @@ targets:
   example-mariadb:
     driver: mariadb
     credentials:
-      file: /etc/savetoa/credentials.d/example-mariadb.yml
+      file: /etc/savetoa/credentials.d/example-mariadb.cnf
     source:
       socket: /run/mysqld/mysqld.sock
       replica:
         required: true
+        source_host: db-primary.internal
+        source_port: 3306
+        source_user: backup_replication
+        require_gtid: true
         max_lag: 5m
     capture:
       prepare: true
@@ -39,6 +43,7 @@ targets:
         credentials:
           file: /etc/savetoa/credentials.d/offsite-s3.yml
         endpoint: https://s3.example.invalid
+        region: eu-west-1
         bucket: example-backups
         prefix: databases
     retention:
@@ -96,7 +101,7 @@ func TestParseFailsClosed(t *testing.T) {
 			want: "mapping key \"config_version\" already defined",
 		},
 		"inline secret": {
-			data: strings.Replace(validConfig, "file: /etc/savetoa/credentials.d/example-mariadb.yml", "file: /etc/savetoa/credentials.d/example-mariadb.yml\n      password: forbidden", 1),
+			data: strings.Replace(validConfig, "file: /etc/savetoa/credentials.d/example-mariadb.cnf", "file: /etc/savetoa/credentials.d/example-mariadb.cnf\n      password: forbidden", 1),
 			want: "field password not found",
 		},
 		"unknown driver option": {

@@ -10,12 +10,23 @@
 - Secrets never enter argv, logs, errors, manifests, or telemetry.
 - Restore never targets a live service by default.
 
+Restore verifies the completion marker, manifest binding, payload size, and
+SHA-256 before creating its destination. The destination must be an explicit,
+absolute, non-existing directory. Tar extraction rejects absolute and
+non-canonical paths, traversal, duplicates, links, and special files; a failed
+materialization removes only the destination it created. Restore never starts,
+stops, or replaces a service.
+
 ## Encryption
 
 Encryption is optional in the product contract and explicit in each target.
 The preferred first implementation is recipient-based `age` encryption using
 dedicated X25519 recipients. A backup runner then needs only public recipients;
 decryption identities can remain offline and be separately escrowed.
+
+The restore command accepts a private X25519 identity only through a regular,
+non-symlink file with mode `0600`. It does not accept an identity value in argv
+or copy rejected identity material into an error.
 
 Recipient files contain one public `age1...` X25519 recipient per line, with
 blank lines and `#` comments allowed. SSH recipients, plugin recipients, and
@@ -36,6 +47,11 @@ reviewed systemd drop-in for a particular target after validating the native
 backup tool's actual permission requirements.
 
 The generic YAML configuration must never offer a `run_as: root` switch.
+
+MariaDB capture directories are private and short-lived. Archive traversal
+rejects symlinks and special files, and only the resulting tar stream enters
+the durable spool. On cancellation or native-tool failure, SaveToA uses a
+separate bounded cleanup context to attempt to resume the replica SQL thread.
 
 ## Retention
 

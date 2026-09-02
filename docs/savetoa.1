@@ -14,8 +14,9 @@ SaveToA coordinates named backup targets. A target selects a capture driver,
 source settings and credentials, transformations, destinations, and retention
 policy.
 .PP
-This release is an implementation scaffold. Commands that would capture,
-delete, verify, or restore data fail explicitly until implemented.
+This release implements physical MariaDB capture, verified local and idempotent S3 delivery, and
+safe materialization of completed local backup sets. Commands for other capture
+drivers, deletion, and explicit verification fail explicitly until implemented.
 .SH OPTIONS
 .TP
 .BI \-\-config " path"
@@ -29,7 +30,14 @@ Print version information and exit.
 .SH COMMANDS
 .TP
 .BI run " target"
-Capture and deliver one configured target.
+Capture and deliver one configured MariaDB target to its local and S3 destinations.
+The command performs replica health checks, physical capture and preparation,
+optional zstd and age transforms, durable staging, and destination verification.
+.TP
+.BI deliver " target destination backup-id"
+Retry an S3 destination from a completed set in the durable spool. Existing
+objects are accepted only when their bytes match, and the completion marker is
+published last. No new capture or encryption is performed.
 .TP
 .BI run-group " group"
 Run a configured group of targets.
@@ -40,8 +48,15 @@ List completed backup sets.
 .BI verify " backup-id"
 Verify a completed backup set.
 .TP
-.BI restore " backup-id"
-Materialize a backup into an explicit restore destination.
+.B restore
+.BI \-\-source-root " root"
+.BI \-\-target-dir " directory"
+.RI [ \-\-identity-file " file" ]
+.I backup-id
+.br
+Verify and materialize a completed local backup set into a new explicit
+directory. Encrypted sets require a regular, non-symlink identity file with
+mode 0600. This command does not activate or replace a database service.
 .TP
 .BI prune " target"
 Apply the configured retention policy to completed backup sets.

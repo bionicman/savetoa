@@ -115,6 +115,37 @@ func TestEncryptReaderHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestParseIdentitiesAndDecryptReader(t *testing.T) {
+	identity, encryptor := testEncryptor(t)
+	ciphertext, err := encryptor.EncryptReader(context.Background(), strings.NewReader("database pages"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identities, err := ParseIdentities(strings.NewReader("# restore escrow\n" + identity.String() + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext, err := DecryptReader(context.Background(), ciphertext, identities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(plaintext)
+	if err != nil || string(data) != "database pages" {
+		t.Fatalf("decrypted data = %q, error = %v", data, err)
+	}
+}
+
+func TestParseIdentitiesDoesNotEchoInvalidInput(t *testing.T) {
+	secretShaped := "AGE-SECRET-KEY-PRIVATE-MATERIAL"
+	_, err := ParseIdentities(strings.NewReader(secretShaped))
+	if err == nil {
+		t.Fatal("ParseIdentities(invalid) error = nil")
+	}
+	if strings.Contains(err.Error(), secretShaped) {
+		t.Fatal("identity parser error contains input")
+	}
+}
+
 func testEncryptor(t *testing.T) (*age.X25519Identity, *Encryptor) {
 	t.Helper()
 	identity, err := age.GenerateX25519Identity()

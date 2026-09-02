@@ -12,6 +12,16 @@ Semantic Versioning after its first stable release.
 - Durable local backup-set writes with manifest-bound completion markers.
 - Cross-process target locks and idempotent spool-to-local delivery.
 - Streaming X25519 age encryption with non-secret recipient fingerprints.
+- Read-only MariaDB doctor checks for replica identity, GTID, lag and matching
+  server/backup-tool versions.
+- End-to-end MariaDB `run` with safe replica capture, guaranteed SQL-thread
+  resume attempts, preparation validation, current and legacy metadata support,
+  tar/zstd streaming, durable spool, and verified local fan-out.
+- Safe archive traversal that rejects symlinks and non-regular capture entries.
+- Verified local restore with reverse age/zstd transforms and traversal-safe tar
+  materialization into an explicit new directory.
+- Idempotent S3-compatible delivery from the durable spool, with conditional
+  writes, byte-verified retries, conflict refusal, and completion-last publication.
 - Debian packaging, systemd templates, sysusers, and tmpfiles manifests.
 - Architecture, design rationale, security, configuration, and roadmap docs.
 

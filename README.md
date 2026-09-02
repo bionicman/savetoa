@@ -11,16 +11,24 @@ does not emulate floppy media and is not tied to a particular application.
 
 SaveToA is an early implementation. Strict config and manifest v1 contracts,
 target locking, streaming X25519 `age` encryption, durable spool, and verified
-local delivery exist; capture drivers and end-to-end backup commands are not
-implemented yet. Commands that could imply data was protected fail explicitly
-until their implementation is complete.
+local and idempotent S3 delivery exist. MariaDB `run` performs replica health gates, physical
+capture, replica-thread recovery, preparation, tar/zstd packaging, optional
+age encryption, durable staging, and delivery to every configured local or S3 destination. MariaDB `doctor`
+performs the same read-only replica, GTID, lag, and tool-version gates without
+capturing data. `restore` verifies a completed local set and safely materializes
+its tar, zstd, and age layers into a new explicit directory without activating
+a service. Failed S3 delivery can be retried from the durable spool by backup
+ID without capturing or encrypting again. Other capture drivers and retention
+still fail explicitly.
 
 ## Intended interface
 
 ```console
 savetoa run production-mariadb
+savetoa deliver production-mariadb offsite <backup-id>
 savetoa verify <backup-id>
-savetoa restore <backup-id> --target-dir /srv/restore
+savetoa restore --source-root /var/backups/savetoa \
+  --target-dir /srv/restore --identity-file /run/restore.age <backup-id>
 savetoa prune production-mariadb
 savetoa doctor production-mariadb
 ```
@@ -64,7 +72,7 @@ an unprivileged `savetoa` system account and persistent state below
 
 Template units are deliberately not enabled by package installation. A
 configuration-management consumer supplies targets, credentials, permissions,
-timer schedules, and any database-specific supplementary groups.
+timer schedules, and narrowly scoped database filesystem access.
 
 ## Documentation
 

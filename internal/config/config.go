@@ -24,6 +24,8 @@ const (
 var (
 	namePattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 	memorySizePattern = regexp.MustCompile(`^[1-9][0-9]*(K|M|G|KiB|MiB|GiB)?$`)
+	bucketPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+	regionPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 )
 
 type Config struct {
@@ -54,8 +56,12 @@ type MariaDBSource struct {
 }
 
 type MariaDBReplicaGate struct {
-	Required bool   `yaml:"required"`
-	MaxLag   string `yaml:"max_lag"`
+	Required    bool   `yaml:"required"`
+	SourceHost  string `yaml:"source_host"`
+	SourcePort  int    `yaml:"source_port"`
+	SourceUser  string `yaml:"source_user"`
+	RequireGTID bool   `yaml:"require_gtid"`
+	MaxLag      string `yaml:"max_lag"`
 }
 
 type MariaDBCapture struct {
@@ -79,6 +85,7 @@ type Destination struct {
 	Path        string         `yaml:"path,omitempty"`
 	Credentials *FileReference `yaml:"credentials,omitempty"`
 	Endpoint    string         `yaml:"endpoint,omitempty"`
+	Region      string         `yaml:"region,omitempty"`
 	Bucket      string         `yaml:"bucket,omitempty"`
 	Prefix      string         `yaml:"prefix,omitempty"`
 }
@@ -184,6 +191,18 @@ func (target Target) validate() error {
 	if !target.Source.Replica.Required {
 		return errors.New("source.replica.required must be true for mariadb")
 	}
+	if strings.TrimSpace(target.Source.Replica.SourceHost) == "" || strings.ContainsAny(target.Source.Replica.SourceHost, "\r\n\t") {
+		return errors.New("source.replica.source_host must be a non-empty single-line host")
+	}
+	if target.Source.Replica.SourcePort < 1 || target.Source.Replica.SourcePort > 65535 {
+		return errors.New("source.replica.source_port must be between 1 and 65535")
+	}
+	if err := validateName("source.replica.source_user", target.Source.Replica.SourceUser); err != nil {
+		return err
+	}
+	if !target.Source.Replica.RequireGTID {
+		return errors.New("source.replica.require_gtid must be true for mariadb")
+	}
 	maxLag, err := time.ParseDuration(target.Source.Replica.MaxLag)
 	if err != nil || maxLag <= 0 {
 		return errors.New("source.replica.max_lag must be a positive duration")
@@ -242,7 +261,7 @@ func (destination Destination) validate() error {
 		if err := validateAbsolutePath("path", destination.Path, true); err != nil {
 			return err
 		}
-		if destination.Credentials != nil || destination.Endpoint != "" || destination.Bucket != "" || destination.Prefix != "" {
+		if destination.Credentials != nil || destination.Endpoint != "" || destination.Region != "" || destination.Bucket != "" || destination.Prefix != "" {
 			return errors.New("local destination contains S3-only fields")
 		}
 	case "s3":
@@ -256,11 +275,14 @@ func (destination Destination) validate() error {
 			return err
 		}
 		endpoint, err := url.Parse(destination.Endpoint)
-		if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
-			return errors.New("endpoint must be an HTTPS URL without credentials, query, or fragment")
+		if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Path != "" && endpoint.Path != "/") {
+			return errors.New("endpoint must be an HTTPS URL containing only an origin, without credentials, path, query, or fragment")
 		}
-		if destination.Bucket == "" {
-			return errors.New("bucket is required for s3")
+		if !regionPattern.MatchString(destination.Region) {
+			return errors.New("region must be a lowercase S3 signing region")
+		}
+		if !bucketPattern.MatchString(destination.Bucket) || strings.Contains(destination.Bucket, "..") {
+			return errors.New("bucket must be a lowercase DNS-compatible name of 3 to 63 characters")
 		}
 		if destination.Prefix != "" && (strings.HasPrefix(destination.Prefix, "/") ||
 			strings.Contains(destination.Prefix, `\`) || objectpath.Clean(destination.Prefix) != destination.Prefix) {

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,19 +24,79 @@ import (
 )
 
 const (
-	manifestFilename = "manifest.json"
-	completeFilename = "complete"
+	ManifestFilename = "manifest.json"
+	CompleteFilename = "complete"
 	maxMarkerSize    = 128
+)
+
+const (
+	manifestFilename = ManifestFilename
+	completeFilename = CompleteFilename
 )
 
 var (
 	ErrSetExists        = errors.New("backup set already exists")
+	ErrSetNotFound      = errors.New("backup set not found")
+	ErrAmbiguousSet     = errors.New("backup ID is not unique")
 	ErrArtifactMismatch = errors.New("payload does not match expected artifact metadata")
 	componentPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 	backupIDPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	yearPattern         = regexp.MustCompile(`^[0-9]{4}$`)
 	datePartPattern     = regexp.MustCompile(`^[0-9]{2}$`)
 )
+
+func (store *Store) FindByID(backupID string) (*Set, error) {
+	if store == nil || store.root == nil {
+		return nil, errors.New("local destination is closed")
+	}
+	if !backupIDPattern.MatchString(backupID) {
+		return nil, errors.New("backup ID is invalid")
+	}
+	var matches []string
+	err := fs.WalkDir(store.root.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if !entry.IsDir() || path == "." {
+			return nil
+		}
+		depth := strings.Count(filepath.ToSlash(path), "/") + 1
+		if depth == 6 {
+			if filepath.Base(path) == backupID {
+				marker, err := store.root.Lstat(filepath.Join(path, completeFilename))
+				if errors.Is(err, os.ErrNotExist) {
+					return fs.SkipDir
+				}
+				if err != nil {
+					return err
+				}
+				if marker.Mode().IsRegular() && marker.Mode()&os.ModeSymlink == 0 {
+					matches = append(matches, path)
+				} else {
+					return errors.New("backup completion marker is not a regular file")
+				}
+			}
+			return fs.SkipDir
+		}
+		if depth > 6 {
+			return fs.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan local destination: %w", err)
+	}
+	if len(matches) == 0 {
+		return nil, ErrSetNotFound
+	}
+	if len(matches) != 1 {
+		return nil, ErrAmbiguousSet
+	}
+	return store.Load(matches[0])
+}
 
 type Store struct {
 	root *os.Root
@@ -219,7 +280,7 @@ func (store *Store) Load(relativePath string) (*Set, error) {
 	return &Set{Environment: parts[0], RelativePath: relativePath, Manifest: *value}, nil
 }
 
-func (store *Store) OpenPayload(relativePath string) (*Set, io.ReadCloser, error) {
+func (store *Store) OpenPayload(relativePath string) (*Set, *os.File, error) {
 	set, err := store.Load(relativePath)
 	if err != nil {
 		return nil, nil, err
@@ -233,33 +294,76 @@ func (store *Store) OpenPayload(relativePath string) (*Set, io.ReadCloser, error
 }
 
 func (store *Store) Verify(ctx context.Context, relativePath string) (*Set, error) {
-	if ctx == nil {
-		return nil, errors.New("context is required")
-	}
-	set, file, err := store.OpenPayload(relativePath)
+	set, file, err := store.OpenVerifiedPayload(ctx, relativePath)
 	if err != nil {
 		return nil, err
 	}
+	if err := file.Close(); err != nil {
+		return nil, fmt.Errorf("close payload: %w", err)
+	}
+	return set, nil
+}
+
+// ReadMetadata returns the exact durable manifest and completion-marker bytes.
+// It validates their relationship before returning either file.
+func (store *Store) ReadMetadata(relativePath string) (*Set, []byte, []byte, error) {
+	set, err := store.Load(relativePath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	manifestData, err := store.readRegularFile(filepath.Join(relativePath, manifestFilename), manifest.MaxFileSize)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("read manifest: %w", err)
+	}
+	markerData, err := store.readRegularFile(filepath.Join(relativePath, completeFilename), maxMarkerSize)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("read completion marker: %w", err)
+	}
+	expected, err := parseMarker(markerData)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	actual := sha256.Sum256(manifestData)
+	if subtle.ConstantTimeCompare(expected, actual[:]) != 1 {
+		return nil, nil, nil, errors.New("completion marker does not match manifest")
+	}
+	return set, manifestData, markerData, nil
+}
+
+// OpenVerifiedPayload returns the same open payload file descriptor that was
+// hashed, rewound to its beginning.
+func (store *Store) OpenVerifiedPayload(ctx context.Context, relativePath string) (*Set, *os.File, error) {
+	if ctx == nil {
+		return nil, nil, errors.New("context is required")
+	}
+	set, file, err := store.OpenPayload(relativePath)
+	if err != nil {
+		return nil, nil, err
+	}
 	hasher := sha256.New()
 	size, copyErr := copyWithContext(ctx, hasher, file)
-	closeErr := file.Close()
 	if copyErr != nil {
-		return nil, fmt.Errorf("verify payload: %w", copyErr)
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("close payload: %w", closeErr)
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("verify payload: %w", copyErr)
 	}
 	if size != set.Manifest.Artifact.SizeBytes {
-		return nil, errors.New("payload size does not match manifest")
+		_ = file.Close()
+		return nil, nil, errors.New("payload size does not match manifest")
 	}
 	expected, err := hex.DecodeString(set.Manifest.Artifact.Checksum.Value)
 	if err != nil {
-		return nil, errors.New("manifest contains an invalid payload checksum")
+		_ = file.Close()
+		return nil, nil, errors.New("manifest contains an invalid payload checksum")
 	}
 	if subtle.ConstantTimeCompare(expected, hasher.Sum(nil)) != 1 {
-		return nil, errors.New("payload checksum does not match manifest")
+		_ = file.Close()
+		return nil, nil, errors.New("payload checksum does not match manifest")
 	}
-	return set, nil
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("rewind verified payload: %w", err)
+	}
+	return set, file, nil
 }
 
 func (store *Store) ensureHierarchy(relativePath string) error {

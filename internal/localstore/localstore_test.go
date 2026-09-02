@@ -305,6 +305,63 @@ func TestNewAndLoadRejectUnsafePaths(t *testing.T) {
 	}
 }
 
+func TestFindByIDFindsOnlyCompletedUniqueSet(t *testing.T) {
+	store, rootPath := newTestStore(t)
+	set, err := store.Commit(context.Background(), "test", validManifest(), strings.NewReader("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := store.FindByID(set.Manifest.BackupID)
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if found.RelativePath != set.RelativePath {
+		t.Fatalf("FindByID() path = %q, want %q", found.RelativePath, set.RelativePath)
+	}
+	if _, err := store.FindByID("missing"); !errors.Is(err, ErrSetNotFound) {
+		t.Fatalf("FindByID(missing) error = %v", err)
+	}
+
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(outside, "target", "2026", "09", "02", set.Manifest.BackupID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(rootPath, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	found, err = store.FindByID(set.Manifest.BackupID)
+	if err != nil || found.RelativePath != set.RelativePath {
+		t.Fatalf("FindByID(with symlink) = %#v, %v", found, err)
+	}
+}
+
+func TestFindByIDRejectsAmbiguousID(t *testing.T) {
+	store, _ := newTestStore(t)
+	value := validManifest()
+	if _, err := store.Commit(context.Background(), "first", value, strings.NewReader("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Commit(context.Background(), "second", value, strings.NewReader("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FindByID(value.BackupID); !errors.Is(err, ErrAmbiguousSet) {
+		t.Fatalf("FindByID(ambiguous) error = %v", err)
+	}
+}
+
+func TestFindByIDIgnoresIncompleteSet(t *testing.T) {
+	store, rootPath := newTestStore(t)
+	value := validManifest()
+	incomplete := filepath.Join(rootPath, "test", value.Target, "2026", "09", "02", value.BackupID)
+	if err := os.MkdirAll(incomplete, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FindByID(value.BackupID); !errors.Is(err, ErrSetNotFound) {
+		t.Fatalf("FindByID(incomplete) error = %v", err)
+	}
+}
+
 func newTestStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	rootPath := t.TempDir()

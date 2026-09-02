@@ -12,6 +12,7 @@ import (
 	"github.com/bionicman/savetoa/internal/agecrypto"
 	"github.com/bionicman/savetoa/internal/localstore"
 	"github.com/bionicman/savetoa/internal/manifest"
+	"github.com/bionicman/savetoa/internal/s3store"
 )
 
 var ErrDestinationConflict = errors.New("destination contains a different backup set with the same ID")
@@ -82,6 +83,40 @@ func (spool *Spool) Verify(ctx context.Context, relativePath string) (*localstor
 	set, err := spool.store.Verify(ctx, relativePath)
 	if err != nil {
 		return nil, fmt.Errorf("verify staged capture: %w", err)
+	}
+	return set, nil
+}
+
+func (spool *Spool) FindByID(backupID string) (*localstore.Set, error) {
+	set, err := spool.store.FindByID(backupID)
+	if err != nil {
+		return nil, fmt.Errorf("find staged capture: %w", err)
+	}
+	return set, nil
+}
+
+func (spool *Spool) DeliverS3(
+	ctx context.Context,
+	relativePath string,
+	destination *s3store.Store,
+) (*localstore.Set, error) {
+	if destination == nil {
+		return nil, errors.New("S3 destination is required")
+	}
+	set, payload, err := spool.store.OpenVerifiedPayload(ctx, relativePath)
+	if err != nil {
+		return nil, fmt.Errorf("verify staged capture: %w", err)
+	}
+	defer payload.Close()
+	metadataSet, manifestData, markerData, err := spool.store.ReadMetadata(relativePath)
+	if err != nil {
+		return nil, fmt.Errorf("read staged metadata: %w", err)
+	}
+	if !sameManifest(set.Manifest, metadataSet.Manifest) {
+		return nil, errors.New("staged metadata changed during verification")
+	}
+	if err := destination.Deliver(ctx, relativePath, set, payload, manifestData, markerData); err != nil {
+		return nil, fmt.Errorf("deliver staged capture to S3: %w", err)
 	}
 	return set, nil
 }
