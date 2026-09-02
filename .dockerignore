@@ -1,0 +1,11 @@
+**
+!go.*
+!Makefile
+!cmd/
+!cmd/**
+!docs/
+!docs/manifest-v1.example.json
+!internal/
+!internal/**
+!packaging/
+!packaging/config.example.yml

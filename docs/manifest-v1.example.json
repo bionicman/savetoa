@@ -1,0 +1,38 @@
+{
+  "format_version": 1,
+  "backup_id": "20260902-example",
+  "target": "example-mariadb",
+  "capture_driver": "mariadb",
+  "started_at": "2026-09-02T10:00:00Z",
+  "completed_at": "2026-09-02T10:05:00Z",
+  "tool": {
+    "name": "mariadb-backup",
+    "version": "12.3.0"
+  },
+  "source": {
+    "server_version": "12.3.0",
+    "replication": {
+      "gtid": "0-1-42"
+    }
+  },
+  "artifact": {
+    "filename": "payload.tar.zst.age",
+    "size_bytes": 1024,
+    "checksum": {
+      "algorithm": "sha256",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "transformations": [
+    {
+      "driver": "zstd",
+      "level": 3
+    },
+    {
+      "driver": "age",
+      "recipient_fingerprints": [
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    }
+  ]
+}

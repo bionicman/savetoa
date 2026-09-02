@@ -46,6 +46,23 @@ Capture and delivery must be separable. If an offsite destination is
 temporarily unavailable after a valid local artifact exists, a later retry must
 deliver the same backup ID rather than capture a different database state.
 
+## Locking and spool
+
+Every target run acquires a cross-process advisory lock named only from its
+validated target name. Lock acquisition is context-cancellable. Different
+targets may run concurrently; the same target may not.
+
+Capture first stages one completed, verified backup set in the durable spool.
+Delivery streams that staged payload to a destination while requiring the
+recorded size and checksum to match. A retry reuses the same path, backup ID,
+manifest, and payload. If an identical completed set is already present, local
+delivery succeeds idempotently after verification. A different set with the
+same ID is a conflict and is never replaced.
+
+When enabled, X25519 `age` encryption is streamed before spool staging. The
+spool and every destination therefore store and checksum the same ciphertext;
+delivery retries never re-encrypt or create a new artifact for the backup ID.
+
 ## Driver interfaces
 
 Initial capture drivers are `mariadb`, `mongodb`, and `redis`. Planned later
@@ -61,7 +78,7 @@ native secure config mechanisms; they never appear in argv.
 
 ## Artifact format
 
-The first format version is expected to use a unique prefix resembling:
+The first format version uses a unique prefix with this layout:
 
 ```text
 <environment>/<target>/<year>/<month>/<day>/<timestamp>-<random-id>/
@@ -70,9 +87,16 @@ The first format version is expected to use a unique prefix resembling:
   complete
 ```
 
-The exact schema remains to be implemented and tested before compatibility is
-promised. `complete` is written last. Listing, retention, and restore ignore
-sets without a valid completion marker.
+The exact manifest schema is defined in [Manifest format v1](manifest-v1.md).
+`complete` is written last. Listing, retention, and restore ignore sets without
+a valid completion marker.
+
+The local writer creates each backup ID directory exclusively and never reuses
+or replaces an existing directory. It creates a private partial directory,
+creates and syncs every file, and writes the completion marker last. It then
+publishes the directory with a dirfd-relative rename and syncs the parent. A
+failed attempt is removed when possible; a crash may leave a hidden partial
+directory, but it cannot leave a published incomplete set.
 
 The manifest records target, capture driver, format version, timestamps,
 source/tool versions, non-secret replication metadata, sizes, transformation

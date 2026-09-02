@@ -1,0 +1,317 @@
+// Package config defines and validates the versioned SaveToA configuration.
+package config
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"net/url"
+	objectpath "path"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"go.yaml.in/yaml/v3"
+)
+
+const (
+	Version     = 1
+	MaxFileSize = 1 << 20
+)
+
+var (
+	namePattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+	memorySizePattern = regexp.MustCompile(`^[1-9][0-9]*(K|M|G|KiB|MiB|GiB)?$`)
+)
+
+type Config struct {
+	Version     int               `yaml:"config_version"`
+	Environment string            `yaml:"environment,omitempty"`
+	Targets     map[string]Target `yaml:"targets"`
+	Groups      map[string]Group  `yaml:"groups"`
+}
+
+type Target struct {
+	Driver       string                 `yaml:"driver"`
+	Credentials  FileReference          `yaml:"credentials"`
+	Source       MariaDBSource          `yaml:"source"`
+	Capture      MariaDBCapture         `yaml:"capture"`
+	Compression  *Compression           `yaml:"compression,omitempty"`
+	Encryption   *Encryption            `yaml:"encryption,omitempty"`
+	Destinations map[string]Destination `yaml:"destinations"`
+	Retention    *Retention             `yaml:"retention,omitempty"`
+}
+
+type FileReference struct {
+	File string `yaml:"file"`
+}
+
+type MariaDBSource struct {
+	Socket  string             `yaml:"socket"`
+	Replica MariaDBReplicaGate `yaml:"replica"`
+}
+
+type MariaDBReplicaGate struct {
+	Required bool   `yaml:"required"`
+	MaxLag   string `yaml:"max_lag"`
+}
+
+type MariaDBCapture struct {
+	Prepare           bool   `yaml:"prepare"`
+	SafeReplicaBackup bool   `yaml:"safe_replica_backup"`
+	UseMemory         string `yaml:"use_memory"`
+}
+
+type Compression struct {
+	Driver string `yaml:"driver"`
+	Level  int    `yaml:"level"`
+}
+
+type Encryption struct {
+	Driver         string `yaml:"driver"`
+	RecipientsFile string `yaml:"recipients_file"`
+}
+
+type Destination struct {
+	Driver      string         `yaml:"driver"`
+	Path        string         `yaml:"path,omitempty"`
+	Credentials *FileReference `yaml:"credentials,omitempty"`
+	Endpoint    string         `yaml:"endpoint,omitempty"`
+	Bucket      string         `yaml:"bucket,omitempty"`
+	Prefix      string         `yaml:"prefix,omitempty"`
+}
+
+type Retention struct {
+	KeepDaily   int `yaml:"keep_daily"`
+	KeepWeekly  int `yaml:"keep_weekly"`
+	KeepMonthly int `yaml:"keep_monthly"`
+}
+
+type Group struct {
+	Targets []string `yaml:"targets"`
+}
+
+func Read(reader io.Reader) (*Config, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, MaxFileSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read configuration: %w", err)
+	}
+	if len(data) > MaxFileSize {
+		return nil, fmt.Errorf("configuration exceeds %d bytes", MaxFileSize)
+	}
+	return Parse(data)
+}
+
+func Parse(data []byte) (*Config, error) {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+
+	var result Config
+	if err := decoder.Decode(&result); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, errors.New("configuration is empty")
+		}
+		return nil, fmt.Errorf("decode configuration: %w", err)
+	}
+
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("configuration must contain exactly one YAML document")
+		}
+		return nil, fmt.Errorf("decode configuration: %w", err)
+	}
+
+	if err := result.Validate(); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (config Config) Validate() error {
+	if config.Version != Version {
+		return fmt.Errorf("config_version must be %d", Version)
+	}
+	if config.Targets == nil {
+		return errors.New("targets must be a mapping")
+	}
+	if config.Groups == nil {
+		return errors.New("groups must be a mapping")
+	}
+	if len(config.Targets) > 0 {
+		if err := validateName("environment", config.Environment); err != nil {
+			return err
+		}
+	} else if config.Environment != "" {
+		if err := validateName("environment", config.Environment); err != nil {
+			return err
+		}
+	}
+
+	for name, target := range config.Targets {
+		if err := validateName("target", name); err != nil {
+			return err
+		}
+		if err := target.validate(); err != nil {
+			return fmt.Errorf("target %q: %w", name, err)
+		}
+	}
+
+	for name, group := range config.Groups {
+		if err := validateName("group", name); err != nil {
+			return err
+		}
+		if err := group.validate(config.Targets); err != nil {
+			return fmt.Errorf("group %q: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
+func (target Target) validate() error {
+	if target.Driver != "mariadb" {
+		return fmt.Errorf("unsupported capture driver %q", target.Driver)
+	}
+	if err := target.Credentials.validate("credentials.file"); err != nil {
+		return err
+	}
+	if err := validateAbsolutePath("source.socket", target.Source.Socket, false); err != nil {
+		return err
+	}
+	if !target.Source.Replica.Required {
+		return errors.New("source.replica.required must be true for mariadb")
+	}
+	maxLag, err := time.ParseDuration(target.Source.Replica.MaxLag)
+	if err != nil || maxLag <= 0 {
+		return errors.New("source.replica.max_lag must be a positive duration")
+	}
+	if !target.Capture.Prepare {
+		return errors.New("capture.prepare must be true for mariadb")
+	}
+	if !target.Capture.SafeReplicaBackup {
+		return errors.New("capture.safe_replica_backup must be true for mariadb")
+	}
+	if !memorySizePattern.MatchString(target.Capture.UseMemory) {
+		return errors.New("capture.use_memory must be a positive size such as 512M")
+	}
+	if target.Compression != nil {
+		if target.Compression.Driver != "zstd" {
+			return fmt.Errorf("unsupported compression driver %q", target.Compression.Driver)
+		}
+		if target.Compression.Level < -5 || target.Compression.Level > 22 {
+			return errors.New("compression.level must be between -5 and 22")
+		}
+	}
+	if target.Encryption != nil {
+		if target.Encryption.Driver != "age" {
+			return fmt.Errorf("unsupported encryption driver %q", target.Encryption.Driver)
+		}
+		if err := validateAbsolutePath("encryption.recipients_file", target.Encryption.RecipientsFile, false); err != nil {
+			return err
+		}
+	}
+	if len(target.Destinations) == 0 {
+		return errors.New("destinations must contain at least one destination")
+	}
+	for name, destination := range target.Destinations {
+		if err := validateName("destination", name); err != nil {
+			return err
+		}
+		if err := destination.validate(); err != nil {
+			return fmt.Errorf("destination %q: %w", name, err)
+		}
+	}
+	if target.Retention != nil {
+		if err := target.Retention.validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (reference FileReference) validate(field string) error {
+	return validateAbsolutePath(field, reference.File, false)
+}
+
+func (destination Destination) validate() error {
+	switch destination.Driver {
+	case "local":
+		if err := validateAbsolutePath("path", destination.Path, true); err != nil {
+			return err
+		}
+		if destination.Credentials != nil || destination.Endpoint != "" || destination.Bucket != "" || destination.Prefix != "" {
+			return errors.New("local destination contains S3-only fields")
+		}
+	case "s3":
+		if destination.Path != "" {
+			return errors.New("s3 destination contains local-only field path")
+		}
+		if destination.Credentials == nil {
+			return errors.New("credentials.file is required for s3")
+		}
+		if err := destination.Credentials.validate("credentials.file"); err != nil {
+			return err
+		}
+		endpoint, err := url.Parse(destination.Endpoint)
+		if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return errors.New("endpoint must be an HTTPS URL without credentials, query, or fragment")
+		}
+		if destination.Bucket == "" {
+			return errors.New("bucket is required for s3")
+		}
+		if destination.Prefix != "" && (strings.HasPrefix(destination.Prefix, "/") ||
+			strings.Contains(destination.Prefix, `\`) || objectpath.Clean(destination.Prefix) != destination.Prefix) {
+			return errors.New("prefix must be a clean relative object-key prefix")
+		}
+	default:
+		return fmt.Errorf("unsupported destination driver %q", destination.Driver)
+	}
+	return nil
+}
+
+func (retention Retention) validate() error {
+	if retention.KeepDaily < 0 || retention.KeepWeekly < 0 || retention.KeepMonthly < 0 {
+		return errors.New("retention counts must not be negative")
+	}
+	if retention.KeepDaily == 0 && retention.KeepWeekly == 0 && retention.KeepMonthly == 0 {
+		return errors.New("retention must keep at least one completed backup")
+	}
+	return nil
+}
+
+func (group Group) validate(targets map[string]Target) error {
+	if len(group.Targets) == 0 {
+		return errors.New("targets must contain at least one target")
+	}
+	seen := make(map[string]struct{}, len(group.Targets))
+	for _, target := range group.Targets {
+		if _, ok := targets[target]; !ok {
+			return fmt.Errorf("references unknown target %q", target)
+		}
+		if _, ok := seen[target]; ok {
+			return fmt.Errorf("contains duplicate target %q", target)
+		}
+		seen[target] = struct{}{}
+	}
+	return nil
+}
+
+func validateName(kind, name string) error {
+	if !namePattern.MatchString(name) {
+		return fmt.Errorf("%s name %q must match %s", kind, name, namePattern.String())
+	}
+	return nil
+}
+
+func validateAbsolutePath(field, path string, rejectRoot bool) error {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return fmt.Errorf("%s must be a clean absolute path", field)
+	}
+	if rejectRoot && path == string(filepath.Separator) {
+		return fmt.Errorf("%s must not be the filesystem root", field)
+	}
+	return nil
+}

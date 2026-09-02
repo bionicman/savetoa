@@ -17,6 +17,12 @@ The preferred first implementation is recipient-based `age` encryption using
 dedicated X25519 recipients. A backup runner then needs only public recipients;
 decryption identities can remain offline and be separately escrowed.
 
+Recipient files contain one public `age1...` X25519 recipient per line, with
+blank lines and `#` comments allowed. SSH recipients, plugin recipients, and
+identity strings are rejected. Manifests record only SHA-256 fingerprints of
+the canonical public recipients. Parser errors never include rejected input,
+so an accidentally supplied identity is not copied into logs.
+
 Production policy may require client-side encryption for both local and S3
 destinations. S3 server-side encryption is an independent defense and is not a
 replacement for client-side encryption.

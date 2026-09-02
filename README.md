@@ -9,10 +9,11 @@ does not emulate floppy media and is not tied to a particular application.
 
 ## Status
 
-SaveToA is an early scaffold. The CLI, packaging contract, configuration
-example, and architecture documentation exist; backup drivers and storage
-destinations are not implemented yet. Commands that could imply data was
-protected fail explicitly until their implementation is complete.
+SaveToA is an early implementation. Strict config and manifest v1 contracts,
+target locking, streaming X25519 `age` encryption, durable spool, and verified
+local delivery exist; capture drivers and end-to-end backup commands are not
+implemented yet. Commands that could imply data was protected fail explicitly
+until their implementation is complete.
 
 ## Intended interface
 
@@ -35,6 +36,16 @@ make test
 ```
 
 The resulting development binary is `build/savetoa`.
+
+Ubuntu 26.04 is the default test environment. To run the same checks in the
+project container:
+
+```console
+docker build --tag savetoa-test .
+docker run --rm savetoa-test
+```
+
+The image runs `make check` by default.
 
 ## Debian package
 
@@ -59,6 +70,7 @@ timer schedules, and any database-specific supplementary groups.
 - [Architecture](docs/architecture.md)
 - [Design rationale](docs/design-rationale.md)
 - [Configuration contract](docs/configuration.md)
+- [Manifest format v1](docs/manifest-v1.md)
 - [Security model](docs/security-model.md)
 - [Development roadmap](docs/roadmap.md)
 
