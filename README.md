@@ -37,8 +37,9 @@ make test
 
 The resulting development binary is `build/savetoa`.
 
-Ubuntu 26.04 is the default test environment. To run the same checks in the
-project container:
+Ubuntu 26.04 with Go 1.27.1 is the default test environment. The container
+downloads the pinned Go release from `go.dev` and verifies its SHA-256 before
+installation. To run the same checks in the project container:
 
 ```console
 docker build --tag savetoa-test .

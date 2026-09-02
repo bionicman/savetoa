@@ -14,3 +14,7 @@ Semantic Versioning after its first stable release.
 - Streaming X25519 age encryption with non-secret recipient fingerprints.
 - Debian packaging, systemd templates, sysusers, and tmpfiles manifests.
 - Architecture, design rationale, security, configuration, and roadmap docs.
+
+### Changed
+
+- Set Go 1.27.1 as the project toolchain and update Go modules and CI actions.
