@@ -15,16 +15,18 @@ local storage and idempotent S3 delivery and recovery exist. MariaDB `run` perfo
 capture, replica-thread recovery, preparation, tar/zstd packaging, optional
 age encryption, durable staging, and delivery to every configured local or S3 destination. MongoDB targets
 perform equivalent hidden/non-voting SECONDARY gates and capture a full
-`mongodump --archive --oplog`. MariaDB and MongoDB `doctor`
-performs the same read-only replica, GTID, lag, and tool-version gates without
-capturing data. `restore` verifies a completed local set and safely materializes
+`mongodump --archive --oplog`. Redis targets require a read-only,
+priority-zero replica and package a newly completed `BGSAVE SCHEDULE` RDB.
+`doctor` performs the corresponding topology, lag, persistence, and
+tool-version gates without capturing data. `restore` verifies a completed local set and safely materializes
 its tar, zstd, and age layers into a new explicit directory without activating
 a service. Failed S3 delivery can be retried from the durable spool by backup
 ID without capturing or encrypting again. `fetch` verifies a completed S3 set
-and atomically imports it into the durable spool for local restore. Other
-capture drivers and retention still fail explicitly. `restore-mongodb`
+and atomically imports it into the durable spool for local restore. Retention
+still fails explicitly. `restore-mongodb`
 replays into a temporary loopback-only `mongod` with a new dbpath and never
-accepts a service endpoint.
+accepts a service endpoint. `restore-redis` loads the RDB into a temporary
+loopback-only `redis-server` with persistence disabled.
 
 ## Intended interface
 
@@ -38,6 +40,9 @@ savetoa restore --source-root /var/backups/savetoa \
   --target-dir /srv/restore --identity-file /run/restore.age <backup-id>
 savetoa restore-mongodb --source-root /var/backups/savetoa \
   --target-dir /srv/mongodb-restore-check \
+  --identity-file /run/restore.age <backup-id>
+savetoa restore-redis --source-root /var/backups/savetoa \
+  --target-dir /srv/redis-restore-check \
   --identity-file /run/restore.age <backup-id>
 savetoa prune production-mariadb
 savetoa doctor production-mariadb

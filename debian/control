@@ -21,6 +21,7 @@ Suggests:
  mariadb-backup,
  mongodb-database-tools,
  mongodb-org-server,
+ redis-server,
  redis-tools,
 Description: job-driven backup orchestrator
  SaveToA coordinates named backup targets. Each target selects a capture

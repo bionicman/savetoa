@@ -21,13 +21,13 @@ duplicate fields are errors at every level. Environment, target, group, and
 destination names use lowercase ASCII letters, digits, `_`, and `-`; they must
 begin with a letter or digit and may contain at most 63 characters.
 
-The implemented target schemas are `mariadb` and `mongodb`. MariaDB requires
+The implemented target schemas are `mariadb`, `mongodb`, and `redis`. MariaDB requires
 an absolute native option-file reference, a local socket, the expected replica
 source host, port and user, mandatory GTID/lag and preparation safety gates,
 and at least one destination. Other capture driver names fail closed until
 their own typed schemas are implemented.
 
-`run` supports MariaDB and MongoDB targets with local and S3 destinations. Captures are
+`run` supports MariaDB, MongoDB, and Redis targets with local and S3 destinations. Captures are
 staged below `/var/lib/savetoa/spool`, verified, and then delivered to every
 configured destination in destination-name order. A failed delivery leaves the
 completed staged set intact and reports its relative path. Retry that exact set
@@ -113,6 +113,26 @@ MongoDB server major/minor and exact Database Tools versions, then replays the
 archive with `--oplogReplay --stopOnError` into a temporary loopback-only
 `mongod`. The target directory must not exist. No live MongoDB endpoint can be
 supplied to this command.
+
+Redis credentials use the same strict password-only YAML shape as MongoDB and
+must be a regular mode-`0600` file. The non-secret ACL username remains in the
+target. Native commands receive the password only through `REDISCLI_AUTH`;
+SaveToA removes any inherited value first and never includes it in argv or
+native error output.
+
+Redis config requires the expected upstream host and port, an up replication
+link with no sync in progress, bounded `master_last_io_seconds_ago`,
+`slave_read_only=1`, and `slave_priority=0`. The configured absolute
+`source.rdb_file` must match the effective Redis `dir` and `dbfilename`.
+Capture requires `bgsave: true`, `schedule: true`, and a positive bounded
+`max_wait`. It records `LASTSAVE` before requesting `BGSAVE SCHEDULE`,
+waits for a newer successful completion, and packages exactly one `dump.rdb`.
+
+`restore-redis` takes the same local source, backup ID, new target directory,
+and optional age identity as `restore`. It requires matching Redis
+server/CLI versions and loads the RDB in a temporary loopback-only
+`redis-server` with AOF and automatic saves disabled. No live Redis endpoint
+or credentials can be supplied.
 
 Config v1 currently accepts `zstd` compression and `age` recipient-file
 encryption. Local destinations require a clean absolute path other than `/`.

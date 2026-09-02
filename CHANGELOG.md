@@ -26,6 +26,8 @@ Semantic Versioning after its first stable release.
   bounded metadata, canonical-manifest, identity, size, and checksum checks.
 - MongoDB hidden-secondary health gates, full archive+oplog capture through the
   common pipeline, and replay verification in a disposable local mongod.
+- Redis read-only replica health gates, fresh BGSAVE/RDB capture through the
+  common pipeline, and load verification in a disposable local redis-server.
 - Debian packaging, systemd templates, sysusers, and tmpfiles manifests.
 - Architecture, design rationale, security, configuration, and roadmap docs.
 

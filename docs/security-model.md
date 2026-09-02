@@ -65,6 +65,17 @@ SaveToA-launched loopback-only `mongod`. The command has no host, port,
 credentials, drop, or live-service activation option. It removes the directory
 it created on failure and stops the disposable server before reporting success.
 
+Redis passwords are read from a mode-0600 file and exposed to `redis-cli` only
+through a scrubbed `REDISCLI_AUTH` environment. Capture refuses a writable,
+promotable, syncing, stale, or wrong-upstream replica. The configured RDB path
+must match Redis itself; symlinks, empty files, stale mtimes, and an inode
+replacement during copy are rejected.
+
+Redis restore accepts no endpoint and starts only a loopback disposable server
+inside a new explicit directory. AOF and automatic saves are disabled, the
+process must remain alive through RDB load and PING, and clean shutdown is
+required before success.
+
 MariaDB capture directories are private and short-lived. Archive traversal
 rejects symlinks and special files, and only the resulting tar stream enters
 the durable spool. On cancellation or native-tool failure, SaveToA uses a

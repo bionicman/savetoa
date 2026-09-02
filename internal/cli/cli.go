@@ -25,6 +25,7 @@ import (
 	"github.com/bionicman/savetoa/internal/manifest"
 	"github.com/bionicman/savetoa/internal/mariadb"
 	"github.com/bionicman/savetoa/internal/mongodb"
+	redisdriver "github.com/bionicman/savetoa/internal/redis"
 	"github.com/bionicman/savetoa/internal/restore"
 	"github.com/bionicman/savetoa/internal/s3store"
 	"github.com/bionicman/savetoa/internal/spool"
@@ -53,6 +54,10 @@ type mongoDBCapturer interface {
 	Capture(context.Context, config.Target, string) (*mongodb.Capture, error)
 }
 
+type redisCapturer interface {
+	Capture(context.Context, config.Target, string) (*redisdriver.Capture, error)
+}
+
 var plannedCommands = []string{
 	"deliver",
 	"doctor",
@@ -61,6 +66,7 @@ var plannedCommands = []string{
 	"prune",
 	"restore",
 	"restore-mongodb",
+	"restore-redis",
 	"run",
 	"run-group",
 	"verify",
@@ -114,6 +120,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if command == "restore-mongodb" {
 		return runMongoDBRestore(remaining[1:], stdout, stderr)
 	}
+	if command == "restore-redis" {
+		return runRedisRestore(remaining[1:], stdout, stderr)
+	}
 	if command == "deliver" {
 		return runDeliver(*configPath, remaining[1:], stdout, stderr)
 	}
@@ -128,6 +137,33 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		*configPath,
 	)
 	return 2
+}
+
+func runRedisRestore(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("restore-redis", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	sourceRoot := flags.String("source-root", "", "absolute path to a local backup store")
+	targetDir := flags.String("target-dir", "", "absolute path to a new disposable restore directory")
+	identityFile := flags.String("identity-file", "", "0600 age X25519 identity file")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 || *sourceRoot == "" || *targetDir == "" {
+		fmt.Fprintln(stderr, "savetoa: restore-redis requires --source-root ROOT --target-dir DIR BACKUP-ID")
+		return 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	set, err := redisdriver.VerifyRestore(ctx, redisdriver.RestoreOptions{
+		SourceRoot: *sourceRoot, BackupID: flags.Arg(0), TargetDir: *targetDir, IdentityFile: *identityFile,
+	}, redisdriver.ProcessRuntime{})
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: Redis restore verification failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "backup_id=%s target=%s driver=redis status=verified path=%s\n",
+		set.Manifest.BackupID, set.Manifest.Target, *targetDir)
+	return 0
 }
 
 func runMongoDBRestore(args []string, stdout, stderr io.Writer) int {
@@ -376,6 +412,8 @@ func runBackup(configPath string, args []string, stdout, stderr io.Writer) int {
 		set, err = executeMariaDBRun(ctx, configuration.Environment, targetName, target, defaultRunPaths, mariadb.NewCapturer())
 	case "mongodb":
 		set, err = executeMongoDBRun(ctx, configuration.Environment, targetName, target, defaultRunPaths, mongodb.NewCapturer())
+	case "redis":
+		set, err = executeRedisRun(ctx, configuration.Environment, targetName, target, defaultRunPaths, redisdriver.NewCapturer())
 	default:
 		fmt.Fprintf(stderr, "savetoa: run does not support driver %q\n", target.Driver)
 		return 1
@@ -387,6 +425,160 @@ func runBackup(configPath string, args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "target=%s driver=%s status=complete backup_id=%s path=%s\n",
 		targetName, target.Driver, set.Manifest.BackupID, set.RelativePath)
 	return 0
+}
+
+func executeRedisRun(
+	ctx context.Context,
+	environment string,
+	targetName string,
+	target config.Target,
+	paths runPaths,
+	capturer redisCapturer,
+) (*localstore.Set, error) {
+	if ctx == nil || capturer == nil {
+		return nil, errors.New("context and Redis capturer are required")
+	}
+	type destinationHandle struct {
+		name   string
+		driver string
+		local  *localstore.Store
+		s3     *s3store.Store
+	}
+	destinations := make([]destinationHandle, 0, len(target.Destinations))
+	for name, destination := range target.Destinations {
+		handle := destinationHandle{name: name, driver: destination.Driver}
+		switch destination.Driver {
+		case "local":
+			store, err := localstore.New(destination.Path)
+			if err != nil {
+				return nil, fmt.Errorf("open destination %q: %w", name, err)
+			}
+			handle.local = store
+		case "s3":
+			store, err := openS3Destination(destination)
+			if err != nil {
+				return nil, fmt.Errorf("open destination %q: %w", name, err)
+			}
+			handle.s3 = store
+		default:
+			return nil, fmt.Errorf("destination %q: driver %q is not implemented", name, destination.Driver)
+		}
+		destinations = append(destinations, handle)
+	}
+	defer func() {
+		for _, destination := range destinations {
+			if destination.local != nil {
+				_ = destination.local.Close()
+			}
+		}
+	}()
+	if len(destinations) == 0 {
+		return nil, errors.New("at least one destination is required")
+	}
+	slices.SortFunc(destinations, func(left, right destinationHandle) int {
+		return strings.Compare(left.name, right.name)
+	})
+	var encryptor *agecrypto.Encryptor
+	if target.Encryption != nil {
+		file, err := openRegularFile(target.Encryption.RecipientsFile)
+		if err != nil {
+			return nil, fmt.Errorf("open age recipients: %w", err)
+		}
+		encryptor, err = agecrypto.ParseRecipients(file)
+		closeErr := file.Close()
+		if err != nil {
+			return nil, err
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("close age recipients: %w", closeErr)
+		}
+	}
+	locks, err := targetlock.New(paths.locks)
+	if err != nil {
+		return nil, err
+	}
+	defer locks.Close()
+	lock, err := locks.Acquire(ctx, targetName)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Release()
+	started := time.Now().UTC()
+	capture, err := capturer.Capture(ctx, target, paths.work)
+	if err != nil {
+		return nil, err
+	}
+	defer capture.Close()
+	backupID, err := newBackupID(started)
+	if err != nil {
+		return nil, err
+	}
+	filename := "payload.tar"
+	transformations := make([]manifest.Transformation, 0, 2)
+	var payload io.ReadCloser
+	if target.Compression == nil {
+		payload, err = archivepkg.TarReader(ctx, capture.Path())
+	} else {
+		filename += ".zst"
+		level := target.Compression.Level
+		transformations = append(transformations, manifest.Transformation{Driver: "zstd", Level: &level})
+		payload, err = archivepkg.TarZstdReader(ctx, capture.Path(), level)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer payload.Close()
+	value := manifest.Manifest{
+		FormatVersion: manifest.FormatVersion, BackupID: backupID, Target: targetName,
+		CaptureDriver: "redis", StartedAt: started, CompletedAt: time.Now().UTC(),
+		Tool: manifest.Tool{Name: "redis-cli", Version: capture.Report.CLIversion},
+		Source: manifest.Source{ServerVersion: capture.Report.ServerVersion, Replication: map[string]string{
+			"source_host":        capture.Report.MasterHost,
+			"source_port":        strconv.Itoa(capture.Report.MasterPort),
+			"role":               capture.Report.Role,
+			"replication_id":     capture.Report.ReplicationID,
+			"replication_offset": strconv.FormatInt(capture.Report.ReplicationOffset, 10),
+			"lag_seconds":        strconv.FormatInt(int64(capture.Report.Lag/time.Second), 10),
+			"lastsave_unix":      strconv.FormatInt(capture.Report.LastSave, 10),
+			"read_only":          strconv.FormatBool(capture.Report.ReadOnly),
+			"priority":           strconv.Itoa(capture.Report.Priority),
+			"aof_enabled":        strconv.FormatBool(capture.Report.AOFEnabled),
+		}},
+		Artifact: manifest.Artifact{Filename: filename}, Transformations: transformations,
+	}
+	staging, err := spool.New(paths.spool)
+	if err != nil {
+		return nil, err
+	}
+	defer staging.Close()
+	var staged *localstore.Set
+	if encryptor == nil {
+		staged, err = staging.Stage(ctx, environment, value, payload)
+	} else {
+		staged, err = staging.StageEncrypted(ctx, environment, value, payload, encryptor)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := staging.Verify(ctx, staged.RelativePath); err != nil {
+		return nil, err
+	}
+	delivered := staged
+	for _, destination := range destinations {
+		switch destination.driver {
+		case "local":
+			delivered, err = staging.DeliverLocal(ctx, staged.RelativePath, destination.local)
+		case "s3":
+			delivered, err = staging.DeliverS3(ctx, staged.RelativePath, destination.s3)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("deliver destination %q: %w; staged backup remains at %s", destination.name, err, staged.RelativePath)
+		}
+	}
+	if err := capture.Close(); err != nil {
+		return nil, err
+	}
+	return delivered, nil
 }
 
 func executeMongoDBRun(
@@ -783,6 +975,15 @@ func runDoctor(configPath string, args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "target=%s driver=mongodb status=healthy server=%s tools=%s set=%s member=%s lag=%s\n",
 			targetName, report.ServerVersion, report.ToolsVersion, report.SetName, report.Member, report.Lag)
+	case "redis":
+		report, err := redisdriver.NewDoctor().Check(ctx, target)
+		if err != nil {
+			fmt.Fprintf(stderr, "savetoa: doctor %q failed: %v\n", targetName, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "target=%s driver=redis status=healthy server=%s cli=%s source=%s:%d lag=%s offset=%d lastsave=%d\n",
+			targetName, report.ServerVersion, report.CLIversion, report.MasterHost,
+			report.MasterPort, report.Lag, report.ReplicationOffset, report.LastSave)
 	default:
 		fmt.Fprintf(stderr, "savetoa: doctor does not support driver %q\n", target.Driver)
 		return 1
@@ -812,9 +1013,10 @@ func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "  verify BACKUP-ID    verify a completed backup set")
 	fmt.Fprintln(output, "  restore [OPTIONS] BACKUP-ID  verify and materialize into a new directory")
 	fmt.Fprintln(output, "  restore-mongodb [OPTIONS] BACKUP-ID  replay into a disposable local mongod")
+	fmt.Fprintln(output, "  restore-redis [OPTIONS] BACKUP-ID  load RDB into a disposable local redis-server")
 	fmt.Fprintln(output, "  prune TARGET        apply a target's retention policy")
 	fmt.Fprintln(output, "  doctor TARGET       validate a target without capturing data")
 	fmt.Fprintln(output, "  version             print build information")
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "MariaDB and MongoDB run, S3 delivery, restore, and doctor are implemented; other operations fail closed.")
+	fmt.Fprintln(output, "MariaDB, MongoDB, and Redis run, S3 delivery, restore, and doctor are implemented; other operations fail closed.")
 }

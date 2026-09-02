@@ -15,6 +15,7 @@ import (
 	"github.com/bionicman/savetoa/internal/localstore"
 	"github.com/bionicman/savetoa/internal/mariadb"
 	"github.com/bionicman/savetoa/internal/mongodb"
+	redisdriver "github.com/bionicman/savetoa/internal/redis"
 	"github.com/bionicman/savetoa/internal/restore"
 )
 
@@ -298,6 +299,76 @@ func TestExecuteMongoDBRunStagesDeliversAndMaterializesArchive(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(restoreDir, "dump.archive"))
 	if err != nil || string(data) != "full archive and oplog" {
 		t.Fatalf("materialized archive = %q, error=%v", data, err)
+	}
+}
+
+type cliRedisClient struct {
+	state redisdriver.State
+}
+
+func (client *cliRedisClient) Inspect(_ context.Context, _ config.Target, _ redisdriver.Credentials) (*redisdriver.State, error) {
+	result := client.state
+	return &result, nil
+}
+
+func (client *cliRedisClient) BGSAVE(_ context.Context, _ config.Target, _ redisdriver.Credentials) error {
+	client.state.LastSave++
+	return nil
+}
+
+type cliRedisVersionRunner struct{}
+
+func (cliRedisVersionRunner) Version(context.Context) (string, error) { return "8.0.5", nil }
+
+func TestExecuteRedisRunStagesDeliversAndMaterializesRDB(t *testing.T) {
+	root := t.TempDir()
+	paths := runPaths{work: makeDirectory(t, root, "work"), spool: makeDirectory(t, root, "spool"), locks: makeDirectory(t, root, "locks")}
+	destination := makeDirectory(t, root, "destination")
+	credentials := filepath.Join(root, "redis.yml")
+	if err := os.WriteFile(credentials, []byte("password: secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rdb := filepath.Join(root, "dump.rdb")
+	if err := os.WriteFile(rdb, []byte("REDIS0012 pipeline snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := config.Target{
+		Driver: "redis", Credentials: config.FileReference{File: credentials},
+		Source: config.MariaDBSource{
+			Host: "127.0.0.1", Port: 6379, Username: "savetoa_backup", RDBFile: rdb,
+			Replica: config.MariaDBReplicaGate{
+				Required: true, SourceHost: "redis-primary.internal", SourcePort: 6379,
+				RequireReadOnly: true, RequirePriorityZero: true, MaxLag: "5s",
+			},
+		},
+		Capture:      config.MariaDBCapture{BGSAVE: true, Schedule: true, MaxWait: "10m"},
+		Compression:  &config.Compression{Driver: "zstd", Level: 3},
+		Destinations: map[string]config.Destination{"local": {Driver: "local", Path: destination}},
+	}
+	client := &cliRedisClient{state: redisdriver.State{
+		ServerVersion: "8.0.5", Role: "slave", MasterHost: "redis-primary.internal", MasterPort: 6379,
+		MasterLinkStatus: "up", Lag: time.Second, ReplicationID: "abc", ReplicationOffset: 99,
+		ReadOnly: true, LastSave: time.Now().Add(-2 * time.Second).Unix(),
+		LastBGSAVEStatus: "ok", RDBFile: rdb,
+	}}
+	doctor := redisdriver.NewDoctorWithDependencies(client, cliRedisVersionRunner{})
+	capturer := redisdriver.NewCapturerWithDependencies(doctor, client)
+	set, err := executeRedisRun(context.Background(), "test", "production-redis", target, paths, capturer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.Manifest.CaptureDriver != "redis" || set.Manifest.Source.Replication["replication_offset"] != "99" {
+		t.Fatalf("manifest = %#v", set.Manifest)
+	}
+	restoreDir := filepath.Join(root, "restore-redis")
+	if _, err := restore.Materialize(context.Background(), restore.Options{
+		SourceRoot: destination, BackupID: set.Manifest.BackupID, TargetDir: restoreDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(restoreDir, "dump.rdb"))
+	if err != nil || string(data) != "REDIS0012 pipeline snapshot" {
+		t.Fatalf("materialized RDB = %q, error=%v", data, err)
 	}
 }
 

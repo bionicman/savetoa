@@ -90,6 +90,37 @@ targets:
 groups: {}
 `
 
+const validRedisConfig = `
+config_version: 1
+environment: example
+targets:
+  example-redis:
+    driver: redis
+    credentials:
+      file: /etc/savetoa/credentials.d/example-redis.yml
+    source:
+      host: 127.0.0.1
+      port: 6379
+      username: savetoa_backup
+      rdb_file: /var/lib/redis/dump.rdb
+      replica:
+        required: true
+        source_host: redis-primary.internal
+        source_port: 6379
+        require_read_only: true
+        require_priority_zero: true
+        max_lag: 5s
+    capture:
+      bgsave: true
+      schedule: true
+      max_wait: 10m
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+groups: {}
+`
+
 func TestParseValidConfiguration(t *testing.T) {
 	parsed, err := Parse([]byte(validConfig))
 	if err != nil {
@@ -126,6 +157,35 @@ func TestMongoDBConfigurationFailsClosed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse([]byte(input)); err == nil {
 				t.Fatal("Parse(unsafe MongoDB) succeeded")
+			}
+		})
+	}
+}
+
+func TestParseValidRedisConfiguration(t *testing.T) {
+	parsed, err := Parse([]byte(validRedisConfig))
+	if err != nil {
+		t.Fatalf("Parse(valid Redis) error = %v", err)
+	}
+	target := parsed.Targets["example-redis"]
+	if target.Driver != "redis" || target.Source.RDBFile != "/var/lib/redis/dump.rdb" || !target.Capture.Schedule {
+		t.Fatalf("Redis target = %#v", target)
+	}
+}
+
+func TestRedisConfigurationFailsClosed(t *testing.T) {
+	tests := map[string]string{
+		"writable replica": strings.Replace(validRedisConfig, "require_read_only: true", "require_read_only: false", 1),
+		"promotable":       strings.Replace(validRedisConfig, "require_priority_zero: true", "require_priority_zero: false", 1),
+		"no scheduling":    strings.Replace(validRedisConfig, "schedule: true", "schedule: false", 1),
+		"unbounded wait":   strings.Replace(validRedisConfig, "max_wait: 10m", "max_wait: 0s", 1),
+		"relative rdb":     strings.Replace(validRedisConfig, "/var/lib/redis/dump.rdb", "dump.rdb", 1),
+		"cross driver":     strings.Replace(validRedisConfig, "bgsave: true", "bgsave: true\n      oplog: true", 1),
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(input)); err == nil {
+				t.Fatal("Parse(unsafe Redis) succeeded")
 			}
 		})
 	}

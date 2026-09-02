@@ -56,6 +56,7 @@ type MariaDBSource struct {
 	Port                   int                `yaml:"port,omitempty"`
 	Username               string             `yaml:"username,omitempty"`
 	AuthenticationDatabase string             `yaml:"authentication_database,omitempty"`
+	RDBFile                string             `yaml:"rdb_file,omitempty"`
 	Replica                MariaDBReplicaGate `yaml:"replica"`
 }
 
@@ -71,6 +72,7 @@ type MariaDBReplicaGate struct {
 	RequireHidden       bool   `yaml:"require_hidden,omitempty"`
 	RequireNonVoting    bool   `yaml:"require_non_voting,omitempty"`
 	RequirePriorityZero bool   `yaml:"require_priority_zero,omitempty"`
+	RequireReadOnly     bool   `yaml:"require_read_only,omitempty"`
 }
 
 type MariaDBCapture struct {
@@ -79,6 +81,9 @@ type MariaDBCapture struct {
 	UseMemory         string `yaml:"use_memory"`
 	Full              bool   `yaml:"full,omitempty"`
 	Oplog             bool   `yaml:"oplog,omitempty"`
+	BGSAVE            bool   `yaml:"bgsave,omitempty"`
+	Schedule          bool   `yaml:"schedule,omitempty"`
+	MaxWait           string `yaml:"max_wait,omitempty"`
 }
 
 type Compression struct {
@@ -199,6 +204,10 @@ func (target Target) validate() error {
 		if err := target.validateMongoDB(); err != nil {
 			return err
 		}
+	case "redis":
+		if err := target.validateRedis(); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unsupported capture driver %q", target.Driver)
 	}
@@ -209,10 +218,11 @@ func (target Target) validateMariaDB() error {
 	if err := target.Credentials.validate("credentials.file"); err != nil {
 		return err
 	}
-	if target.Source.Host != "" || target.Source.Port != 0 || target.Source.Username != "" || target.Source.AuthenticationDatabase != "" ||
+	if target.Source.Host != "" || target.Source.Port != 0 || target.Source.Username != "" || target.Source.AuthenticationDatabase != "" || target.Source.RDBFile != "" ||
 		target.Source.Replica.SetName != "" || target.Source.Replica.RequireSecondary || target.Source.Replica.RequireHidden ||
-		target.Source.Replica.RequireNonVoting || target.Source.Replica.RequirePriorityZero || target.Capture.Full || target.Capture.Oplog {
-		return errors.New("mariadb target contains mongodb-only fields")
+		target.Source.Replica.RequireNonVoting || target.Source.Replica.RequirePriorityZero || target.Source.Replica.RequireReadOnly ||
+		target.Capture.Full || target.Capture.Oplog || target.Capture.BGSAVE || target.Capture.Schedule || target.Capture.MaxWait != "" {
+		return errors.New("mariadb target contains fields for another driver")
 	}
 	if err := validateAbsolutePath("source.socket", target.Source.Socket, false); err != nil {
 		return err
@@ -253,9 +263,10 @@ func (target Target) validateMongoDB() error {
 		return err
 	}
 	if target.Source.Socket != "" || target.Source.Replica.SourceHost != "" || target.Source.Replica.SourcePort != 0 ||
-		target.Source.Replica.SourceUser != "" || target.Source.Replica.RequireGTID || target.Capture.Prepare ||
-		target.Capture.SafeReplicaBackup || target.Capture.UseMemory != "" {
-		return errors.New("mongodb target contains mariadb-only fields")
+		target.Source.Replica.SourceUser != "" || target.Source.Replica.RequireGTID || target.Source.Replica.RequireReadOnly ||
+		target.Source.RDBFile != "" || target.Capture.Prepare || target.Capture.SafeReplicaBackup || target.Capture.UseMemory != "" ||
+		target.Capture.BGSAVE || target.Capture.Schedule || target.Capture.MaxWait != "" {
+		return errors.New("mongodb target contains fields for another driver")
 	}
 	if strings.TrimSpace(target.Source.Host) == "" || strings.ContainsAny(target.Source.Host, "\r\n\t") {
 		return errors.New("source.host must be a non-empty single-line host")
@@ -282,6 +293,54 @@ func (target Target) validateMongoDB() error {
 	}
 	if !target.Capture.Full || !target.Capture.Oplog {
 		return errors.New("mongodb capture.full and capture.oplog must both be true")
+	}
+	return nil
+}
+
+func (target Target) validateRedis() error {
+	if err := target.Credentials.validate("credentials.file"); err != nil {
+		return err
+	}
+	if target.Source.Socket != "" || target.Source.AuthenticationDatabase != "" ||
+		target.Source.Replica.SourceUser != "" || target.Source.Replica.RequireGTID ||
+		target.Source.Replica.SetName != "" || target.Source.Replica.RequireSecondary ||
+		target.Source.Replica.RequireHidden || target.Source.Replica.RequireNonVoting ||
+		target.Capture.Prepare || target.Capture.SafeReplicaBackup || target.Capture.UseMemory != "" ||
+		target.Capture.Full || target.Capture.Oplog {
+		return errors.New("redis target contains fields for another driver")
+	}
+	if strings.TrimSpace(target.Source.Host) == "" || strings.ContainsAny(target.Source.Host, "\r\n\t") {
+		return errors.New("source.host must be a non-empty single-line host")
+	}
+	if target.Source.Port < 1 || target.Source.Port > 65535 {
+		return errors.New("source.port must be between 1 and 65535")
+	}
+	if err := validateName("source.username", target.Source.Username); err != nil {
+		return err
+	}
+	if err := validateAbsolutePath("source.rdb_file", target.Source.RDBFile, false); err != nil {
+		return err
+	}
+	gate := target.Source.Replica
+	if !gate.Required || !gate.RequireReadOnly || !gate.RequirePriorityZero {
+		return errors.New("redis replica safety gates must all be true")
+	}
+	if strings.TrimSpace(gate.SourceHost) == "" || strings.ContainsAny(gate.SourceHost, "\r\n\t") {
+		return errors.New("source.replica.source_host must be a non-empty single-line host")
+	}
+	if gate.SourcePort < 1 || gate.SourcePort > 65535 {
+		return errors.New("source.replica.source_port must be between 1 and 65535")
+	}
+	maxLag, err := time.ParseDuration(gate.MaxLag)
+	if err != nil || maxLag <= 0 {
+		return errors.New("source.replica.max_lag must be a positive duration")
+	}
+	maxWait, err := time.ParseDuration(target.Capture.MaxWait)
+	if err != nil || maxWait <= 0 || maxWait > 24*time.Hour {
+		return errors.New("capture.max_wait must be a positive duration no greater than 24h")
+	}
+	if !target.Capture.BGSAVE || !target.Capture.Schedule {
+		return errors.New("redis capture.bgsave and capture.schedule must both be true")
 	}
 	return nil
 }

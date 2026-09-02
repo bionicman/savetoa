@@ -14,10 +14,10 @@ SaveToA coordinates named backup targets. A target selects a capture driver,
 source settings and credentials, transformations, destinations, and retention
 policy.
 .PP
-This release implements physical MariaDB and full+oplog MongoDB capture, verified local storage,
+This release implements physical MariaDB, full+oplog MongoDB, and fresh-RDB Redis capture, verified local storage,
 idempotent S3 delivery and recovery, and
-safe materialization of completed local backup sets. Commands for other capture
-drivers, deletion, and explicit verification fail explicitly until implemented.
+safe materialization of completed local backup sets. Deletion and explicit
+verification commands fail explicitly until implemented.
 .SH OPTIONS
 .TP
 .BI \-\-config " path"
@@ -31,7 +31,7 @@ Print version information and exit.
 .SH COMMANDS
 .TP
 .BI run " target"
-Capture and deliver one configured MariaDB or MongoDB target to its local and S3 destinations.
+Capture and deliver one configured MariaDB, MongoDB, or Redis target to its local and S3 destinations.
 The command performs driver-specific replica health checks and capture,
 optional zstd and age transforms, durable staging, and destination verification.
 .TP
@@ -80,6 +80,17 @@ Verify a MongoDB backup and replay its archive and oplog into a temporary
 loopback-only mongod using a new dbpath inside the explicit target directory.
 The command does not accept a database endpoint and stops the disposable
 server before reporting success.
+.TP
+.B restore-redis
+.BI \-\-source-root " root"
+.BI \-\-target-dir " directory"
+.RI [ \-\-identity-file " file" ]
+.I backup-id
+.br
+Verify a Redis backup and load its RDB into a temporary loopback-only
+redis-server inside the explicit target directory. AOF and automatic saves are
+disabled, no database endpoint is accepted, and the process is stopped before
+success is reported.
 .TP
 .BI prune " target"
 Apply the configured retention policy to completed backup sets.

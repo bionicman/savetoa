@@ -96,8 +96,55 @@ targets:
         bucket: example-backups
         prefix: databases
 
+  example-redis:
+    driver: redis
+
+    credentials:
+      file: /etc/savetoa/credentials.d/example-redis.yml
+
+    source:
+      host: 127.0.0.1
+      port: 6379
+      username: savetoa_backup
+      rdb_file: /var/lib/redis/dump.rdb
+      replica:
+        required: true
+        source_host: redis-primary.internal
+        source_port: 6379
+        require_read_only: true
+        require_priority_zero: true
+        max_lag: 5s
+
+    capture:
+      bgsave: true
+      schedule: true
+      max_wait: 10m
+
+    compression:
+      driver: zstd
+      level: 3
+
+    encryption:
+      driver: age
+      recipients_file: /etc/savetoa/recipients.d/example.age
+
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+
+      offsite:
+        driver: s3
+        credentials:
+          file: /etc/savetoa/credentials.d/offsite-s3.yml
+        endpoint: https://s3.example.invalid
+        region: eu-west-1
+        bucket: example-backups
+        prefix: databases
+
 groups:
   example-databases:
     targets:
       - example-mariadb
       - example-mongodb
+      - example-redis

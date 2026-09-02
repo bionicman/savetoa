@@ -88,6 +88,13 @@ member configuration. The full `mongodump --archive --oplog` output is wrapped
 as `dump.archive` inside the ordinary payload tar, so storage transformations
 and destinations remain driver-independent.
 
+Redis capture connects only to the configured replica and requires the
+expected upstream, an up and fully synchronized replication link, bounded
+last-I/O lag, read-only mode, and promotion priority zero. It verifies the
+effective RDB path, requests `BGSAVE SCHEDULE`, waits for a newer successful
+`LASTSAVE`, and copies only the atomically published regular RDB into the
+ordinary artifact pipeline.
+
 ## Artifact format
 
 The first format version uses a unique prefix with this layout:
@@ -129,3 +136,8 @@ MongoDB restore verification does not accept an operator-supplied database
 endpoint. It materializes into a new explicit directory, starts a temporary
 loopback-only `mongod` with a new dbpath there, replays the embedded archive and
 oplog, stops the process, and reports success only after clean shutdown.
+
+Redis restore verification likewise accepts no service endpoint. It starts a
+temporary loopback-only `redis-server` against the materialized RDB with AOF
+and automatic saves disabled, waits for a successful load and PING, then stops
+the process cleanly.
