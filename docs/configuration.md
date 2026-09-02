@@ -21,13 +21,13 @@ duplicate fields are errors at every level. Environment, target, group, and
 destination names use lowercase ASCII letters, digits, `_`, and `-`; they must
 begin with a letter or digit and may contain at most 63 characters.
 
-The first implemented target schema is `mariadb`. It requires an absolute
-native MariaDB option-file reference, a local socket, the expected replica
+The implemented target schemas are `mariadb` and `mongodb`. MariaDB requires
+an absolute native option-file reference, a local socket, the expected replica
 source host, port and user, mandatory GTID/lag and preparation safety gates,
 and at least one destination. Other capture driver names fail closed until
 their own typed schemas are implemented.
 
-`run` supports MariaDB targets with local and S3 destinations. Captures are
+`run` supports MariaDB and MongoDB targets with local and S3 destinations. Captures are
 staged below `/var/lib/savetoa/spool`, verified, and then delivered to every
 configured destination in destination-name order. A failed delivery leaves the
 completed staged set intact and reports its relative path. Retry that exact set
@@ -87,6 +87,32 @@ MariaDB capture runs `mariadb-backup --backup` with replica metadata and safe
 replica behavior, explicitly attempts to resume the replica SQL thread even
 after cancellation, prepares the captured directory, and refuses to package a
 set without recognized prepared-checkpoint and GTID metadata.
+
+MongoDB credentials use a protected YAML file containing only the password:
+
+```yaml
+password: replace-through-secret-management
+```
+
+The regular, non-symlink file must have mode `0600`. The non-secret username,
+authentication database, local host and port remain in the target. SaveToA
+uses the password in memory for its direct Go-driver health checks and passes
+the same file to `mongodump --config`; it never puts the password or a
+credential-bearing URI in argv.
+
+MongoDB config requires every replica safety gate: the expected set name,
+SECONDARY state, hidden membership, zero votes, priority zero, and bounded
+optime lag. Capture is always full and always includes `--oplog`; config v1 has
+no database, collection, query, or other filtering fields. The native result is
+stored as `dump.archive` inside the standard payload tar before compression or
+encryption.
+
+`restore-mongodb` takes the same local source, backup ID, target directory and
+optional age identity as `restore`. It additionally preflights matching
+MongoDB server major/minor and exact Database Tools versions, then replays the
+archive with `--oplogReplay --stopOnError` into a temporary loopback-only
+`mongod`. The target directory must not exist. No live MongoDB endpoint can be
+supplied to this command.
 
 Config v1 currently accepts `zstd` compression and `age` recipient-file
 encryption. Local destinations require a clean absolute path other than `/`.

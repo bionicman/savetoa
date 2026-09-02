@@ -10,7 +10,7 @@ Development should proceed through short restore-tested increments.
 4. [x] Complete a disposable MariaDB restore cycle from a SaveToA artifact.
 5. [x] Implement idempotent S3 delivery of an existing local backup ID.
 6. [x] Recover a completed S3 backup into the durable local spool for restore.
-7. [ ] Implement MongoDB full archive plus oplog capture and restore replay.
+7. [x] Implement MongoDB full archive plus oplog capture and disposable restore replay.
 8. [ ] Implement Redis BGSAVE capture and RDB restore verification.
 9. [ ] Implement retention with a distinct maintenance permission boundary.
 10. [ ] Add structured status output and monitoring integration.

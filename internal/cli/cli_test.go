@@ -9,10 +9,13 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bionicman/savetoa/internal/config"
 	"github.com/bionicman/savetoa/internal/localstore"
 	"github.com/bionicman/savetoa/internal/mariadb"
+	"github.com/bionicman/savetoa/internal/mongodb"
+	"github.com/bionicman/savetoa/internal/restore"
 )
 
 func TestHelpIsSuccessful(t *testing.T) {
@@ -231,6 +234,70 @@ func TestExecuteMariaDBRunPreflightsS3DestinationBeforeCapture(t *testing.T) {
 	}
 	if runner.calls != 0 {
 		t.Fatalf("capture started before destination preflight: calls=%d", runner.calls)
+	}
+}
+
+type cliMongoProbe struct{}
+
+func (cliMongoProbe) Inspect(_ context.Context, _ config.Target, _ mongodb.Credentials) (*mongodb.Topology, error) {
+	return &mongodb.Topology{
+		ServerVersion: "8.3.10", SetName: "example-production", Member: "backup:27017",
+		State: "SECONDARY", Hidden: true, Lag: time.Second, Optime: time.Now().UTC(), ConfigVersion: 4,
+	}, nil
+}
+
+type cliMongoVersionRunner struct{}
+
+func (cliMongoVersionRunner) Run(_ context.Context, _ string, _ ...string) ([]byte, error) {
+	return []byte("mongodump version: 100.18.0\n"), nil
+}
+
+type cliMongoArchiveRunner struct{}
+
+func (cliMongoArchiveRunner) CaptureArchive(_ context.Context, _ string, args ...string) error {
+	for _, argument := range args {
+		if strings.HasPrefix(argument, "--archive=") {
+			return os.WriteFile(strings.TrimPrefix(argument, "--archive="), []byte("full archive and oplog"), 0o600)
+		}
+	}
+	return errors.New("archive argument missing")
+}
+
+func TestExecuteMongoDBRunStagesDeliversAndMaterializesArchive(t *testing.T) {
+	root := t.TempDir()
+	paths := runPaths{work: makeDirectory(t, root, "work"), spool: makeDirectory(t, root, "spool"), locks: makeDirectory(t, root, "locks")}
+	destination := makeDirectory(t, root, "destination")
+	credentials := filepath.Join(root, "mongodb.yml")
+	if err := os.WriteFile(credentials, []byte("password: secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	level := 3
+	target := config.Target{
+		Driver: "mongodb", Credentials: config.FileReference{File: credentials},
+		Source: config.MariaDBSource{
+			Host: "127.0.0.1", Port: 27017, Username: "savetoa_backup", AuthenticationDatabase: "admin",
+			Replica: config.MariaDBReplicaGate{Required: true, SetName: "example-production", RequireSecondary: true,
+				RequireHidden: true, RequireNonVoting: true, RequirePriorityZero: true, MaxLag: "5m"},
+		},
+		Capture: config.MariaDBCapture{Full: true, Oplog: true}, Compression: &config.Compression{Driver: "zstd", Level: level},
+		Destinations: map[string]config.Destination{"local": {Driver: "local", Path: destination}},
+	}
+	doctor := mongodb.NewDoctorWithDependencies(cliMongoProbe{}, cliMongoVersionRunner{})
+	capturer := mongodb.NewCapturerWithDependencies(doctor, cliMongoArchiveRunner{})
+	set, err := executeMongoDBRun(context.Background(), "test", "production-mongodb", target, paths, capturer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.Manifest.CaptureDriver != "mongodb" || set.Manifest.Source.Replication["set_name"] != "example-production" {
+		t.Fatalf("manifest = %#v", set.Manifest)
+	}
+	restoreDir := filepath.Join(root, "restore")
+	if _, err := restore.Materialize(context.Background(), restore.Options{SourceRoot: destination, BackupID: set.Manifest.BackupID, TargetDir: restoreDir}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(restoreDir, "dump.archive"))
+	if err != nil || string(data) != "full archive and oplog" {
+		t.Fatalf("materialized archive = %q, error=%v", data, err)
 	}
 }
 

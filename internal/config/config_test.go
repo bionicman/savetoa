@@ -56,6 +56,40 @@ groups:
       - example-mariadb
 `
 
+const validMongoConfig = `
+config_version: 1
+environment: example
+targets:
+  example-mongodb:
+    driver: mongodb
+    credentials:
+      file: /etc/savetoa/credentials.d/example-mongodb.yml
+    source:
+      host: 127.0.0.1
+      port: 27017
+      username: savetoa_backup
+      authentication_database: admin
+      replica:
+        required: true
+        set_name: example-production
+        require_secondary: true
+        require_hidden: true
+        require_non_voting: true
+        require_priority_zero: true
+        max_lag: 5m
+    capture:
+      full: true
+      oplog: true
+    compression:
+      driver: zstd
+      level: 3
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+groups: {}
+`
+
 func TestParseValidConfiguration(t *testing.T) {
 	parsed, err := Parse([]byte(validConfig))
 	if err != nil {
@@ -66,6 +100,34 @@ func TestParseValidConfiguration(t *testing.T) {
 	}
 	if parsed.Targets["example-mariadb"].Driver != "mariadb" {
 		t.Fatal("mariadb target was not decoded")
+	}
+}
+
+func TestParseValidMongoDBConfiguration(t *testing.T) {
+	parsed, err := Parse([]byte(validMongoConfig))
+	if err != nil {
+		t.Fatalf("Parse(valid MongoDB) error = %v", err)
+	}
+	target := parsed.Targets["example-mongodb"]
+	if target.Driver != "mongodb" || target.Source.Replica.SetName != "example-production" || !target.Capture.Oplog {
+		t.Fatalf("MongoDB target = %#v", target)
+	}
+}
+
+func TestMongoDBConfigurationFailsClosed(t *testing.T) {
+	tests := map[string]string{
+		"not secondary": strings.Replace(validMongoConfig, "require_secondary: true", "require_secondary: false", 1),
+		"voting":        strings.Replace(validMongoConfig, "require_non_voting: true", "require_non_voting: false", 1),
+		"filtered":      strings.Replace(validMongoConfig, "full: true", "full: false", 1),
+		"no oplog":      strings.Replace(validMongoConfig, "oplog: true", "oplog: false", 1),
+		"cross driver":  strings.Replace(validMongoConfig, "full: true", "full: true\n      prepare: true", 1),
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(input)); err == nil {
+				t.Fatal("Parse(unsafe MongoDB) succeeded")
+			}
+		})
 	}
 }
 

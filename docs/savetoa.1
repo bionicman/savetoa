@@ -14,7 +14,7 @@ SaveToA coordinates named backup targets. A target selects a capture driver,
 source settings and credentials, transformations, destinations, and retention
 policy.
 .PP
-This release implements physical MariaDB capture, verified local storage,
+This release implements physical MariaDB and full+oplog MongoDB capture, verified local storage,
 idempotent S3 delivery and recovery, and
 safe materialization of completed local backup sets. Commands for other capture
 drivers, deletion, and explicit verification fail explicitly until implemented.
@@ -31,8 +31,8 @@ Print version information and exit.
 .SH COMMANDS
 .TP
 .BI run " target"
-Capture and deliver one configured MariaDB target to its local and S3 destinations.
-The command performs replica health checks, physical capture and preparation,
+Capture and deliver one configured MariaDB or MongoDB target to its local and S3 destinations.
+The command performs driver-specific replica health checks and capture,
 optional zstd and age transforms, durable staging, and destination verification.
 .TP
 .BI deliver " target destination backup-id"
@@ -69,6 +69,17 @@ Verify a completed backup set.
 Verify and materialize a completed local backup set into a new explicit
 directory. Encrypted sets require a regular, non-symlink identity file with
 mode 0600. This command does not activate or replace a database service.
+.TP
+.B restore-mongodb
+.BI \-\-source-root " root"
+.BI \-\-target-dir " directory"
+.RI [ \-\-identity-file " file" ]
+.I backup-id
+.br
+Verify a MongoDB backup and replay its archive and oplog into a temporary
+loopback-only mongod using a new dbpath inside the explicit target directory.
+The command does not accept a database endpoint and stops the disposable
+server before reporting success.
 .TP
 .BI prune " target"
 Apply the configured retention policy to completed backup sets.

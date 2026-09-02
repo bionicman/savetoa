@@ -54,6 +54,17 @@ backup tool's actual permission requirements.
 
 The generic YAML configuration must never offer a `run_as: root` switch.
 
+MongoDB credentials contain only a password in a mode-0600 file. Health checks
+use a direct official-driver connection to the configured member, and native
+capture receives that same file through `mongodump --config`; neither path
+constructs a secret-bearing URI or reports native error text. Full+oplog is
+mandatory and filtering options are absent from config v1.
+
+MongoDB replay is confined to a new operator-selected directory and a
+SaveToA-launched loopback-only `mongod`. The command has no host, port,
+credentials, drop, or live-service activation option. It removes the directory
+it created on failure and stops the disposable server before reporting success.
+
 MariaDB capture directories are private and short-lived. Archive traversal
 rejects symlinks and special files, and only the resulting tar stream enters
 the durable spool. On cancellation or native-tool failure, SaveToA uses a

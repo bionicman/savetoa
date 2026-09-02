@@ -51,23 +51,34 @@ type FileReference struct {
 }
 
 type MariaDBSource struct {
-	Socket  string             `yaml:"socket"`
-	Replica MariaDBReplicaGate `yaml:"replica"`
+	Socket                 string             `yaml:"socket,omitempty"`
+	Host                   string             `yaml:"host,omitempty"`
+	Port                   int                `yaml:"port,omitempty"`
+	Username               string             `yaml:"username,omitempty"`
+	AuthenticationDatabase string             `yaml:"authentication_database,omitempty"`
+	Replica                MariaDBReplicaGate `yaml:"replica"`
 }
 
 type MariaDBReplicaGate struct {
-	Required    bool   `yaml:"required"`
-	SourceHost  string `yaml:"source_host"`
-	SourcePort  int    `yaml:"source_port"`
-	SourceUser  string `yaml:"source_user"`
-	RequireGTID bool   `yaml:"require_gtid"`
-	MaxLag      string `yaml:"max_lag"`
+	Required            bool   `yaml:"required"`
+	SourceHost          string `yaml:"source_host"`
+	SourcePort          int    `yaml:"source_port"`
+	SourceUser          string `yaml:"source_user"`
+	RequireGTID         bool   `yaml:"require_gtid"`
+	MaxLag              string `yaml:"max_lag"`
+	SetName             string `yaml:"set_name,omitempty"`
+	RequireSecondary    bool   `yaml:"require_secondary,omitempty"`
+	RequireHidden       bool   `yaml:"require_hidden,omitempty"`
+	RequireNonVoting    bool   `yaml:"require_non_voting,omitempty"`
+	RequirePriorityZero bool   `yaml:"require_priority_zero,omitempty"`
 }
 
 type MariaDBCapture struct {
 	Prepare           bool   `yaml:"prepare"`
 	SafeReplicaBackup bool   `yaml:"safe_replica_backup"`
 	UseMemory         string `yaml:"use_memory"`
+	Full              bool   `yaml:"full,omitempty"`
+	Oplog             bool   `yaml:"oplog,omitempty"`
 }
 
 type Compression struct {
@@ -179,11 +190,29 @@ func (config Config) Validate() error {
 }
 
 func (target Target) validate() error {
-	if target.Driver != "mariadb" {
+	switch target.Driver {
+	case "mariadb":
+		if err := target.validateMariaDB(); err != nil {
+			return err
+		}
+	case "mongodb":
+		if err := target.validateMongoDB(); err != nil {
+			return err
+		}
+	default:
 		return fmt.Errorf("unsupported capture driver %q", target.Driver)
 	}
+	return target.validateCommon()
+}
+
+func (target Target) validateMariaDB() error {
 	if err := target.Credentials.validate("credentials.file"); err != nil {
 		return err
+	}
+	if target.Source.Host != "" || target.Source.Port != 0 || target.Source.Username != "" || target.Source.AuthenticationDatabase != "" ||
+		target.Source.Replica.SetName != "" || target.Source.Replica.RequireSecondary || target.Source.Replica.RequireHidden ||
+		target.Source.Replica.RequireNonVoting || target.Source.Replica.RequirePriorityZero || target.Capture.Full || target.Capture.Oplog {
+		return errors.New("mariadb target contains mongodb-only fields")
 	}
 	if err := validateAbsolutePath("source.socket", target.Source.Socket, false); err != nil {
 		return err
@@ -216,6 +245,48 @@ func (target Target) validate() error {
 	if !memorySizePattern.MatchString(target.Capture.UseMemory) {
 		return errors.New("capture.use_memory must be a positive size such as 512M")
 	}
+	return nil
+}
+
+func (target Target) validateMongoDB() error {
+	if err := target.Credentials.validate("credentials.file"); err != nil {
+		return err
+	}
+	if target.Source.Socket != "" || target.Source.Replica.SourceHost != "" || target.Source.Replica.SourcePort != 0 ||
+		target.Source.Replica.SourceUser != "" || target.Source.Replica.RequireGTID || target.Capture.Prepare ||
+		target.Capture.SafeReplicaBackup || target.Capture.UseMemory != "" {
+		return errors.New("mongodb target contains mariadb-only fields")
+	}
+	if strings.TrimSpace(target.Source.Host) == "" || strings.ContainsAny(target.Source.Host, "\r\n\t") {
+		return errors.New("source.host must be a non-empty single-line host")
+	}
+	if target.Source.Port < 1 || target.Source.Port > 65535 {
+		return errors.New("source.port must be between 1 and 65535")
+	}
+	if err := validateName("source.username", target.Source.Username); err != nil {
+		return err
+	}
+	if err := validateName("source.authentication_database", target.Source.AuthenticationDatabase); err != nil {
+		return err
+	}
+	gate := target.Source.Replica
+	if !gate.Required || !gate.RequireSecondary || !gate.RequireHidden || !gate.RequireNonVoting || !gate.RequirePriorityZero {
+		return errors.New("mongodb replica safety gates must all be true")
+	}
+	if err := validateName("source.replica.set_name", gate.SetName); err != nil {
+		return err
+	}
+	maxLag, err := time.ParseDuration(gate.MaxLag)
+	if err != nil || maxLag <= 0 {
+		return errors.New("source.replica.max_lag must be a positive duration")
+	}
+	if !target.Capture.Full || !target.Capture.Oplog {
+		return errors.New("mongodb capture.full and capture.oplog must both be true")
+	}
+	return nil
+}
+
+func (target Target) validateCommon() error {
 	if target.Compression != nil {
 		if target.Compression.Driver != "zstd" {
 			return fmt.Errorf("unsupported compression driver %q", target.Compression.Driver)

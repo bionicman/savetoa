@@ -81,6 +81,13 @@ Native commands must be launched with `exec.CommandContext`-style argument
 arrays, never through a shell. Credentials use protected files, environment, or
 native secure config mechanisms; they never appear in argv.
 
+MongoDB capture connects directly to the configured local member. Its health
+gate requires the expected replica-set name, healthy SECONDARY state, bounded
+optime lag behind a healthy PRIMARY, and a hidden, non-voting, priority-zero
+member configuration. The full `mongodump --archive --oplog` output is wrapped
+as `dump.archive` inside the ordinary payload tar, so storage transformations
+and destinations remain driver-independent.
+
 ## Artifact format
 
 The first format version uses a unique prefix with this layout:
@@ -117,3 +124,8 @@ operator contract makes that destructive boundary unmistakable.
 
 Restore verification against disposable services is a first-class feature, not
 an optional documentation exercise.
+
+MongoDB restore verification does not accept an operator-supplied database
+endpoint. It materializes into a new explicit directory, starts a temporary
+loopback-only `mongod` with a new dbpath there, replays the embedded archive and
+oplog, stops the process, and reports success only after clean shutdown.

@@ -13,14 +13,18 @@ SaveToA is an early implementation. Strict config and manifest v1 contracts,
 target locking, streaming X25519 `age` encryption, durable spool, and verified
 local storage and idempotent S3 delivery and recovery exist. MariaDB `run` performs replica health gates, physical
 capture, replica-thread recovery, preparation, tar/zstd packaging, optional
-age encryption, durable staging, and delivery to every configured local or S3 destination. MariaDB `doctor`
+age encryption, durable staging, and delivery to every configured local or S3 destination. MongoDB targets
+perform equivalent hidden/non-voting SECONDARY gates and capture a full
+`mongodump --archive --oplog`. MariaDB and MongoDB `doctor`
 performs the same read-only replica, GTID, lag, and tool-version gates without
 capturing data. `restore` verifies a completed local set and safely materializes
 its tar, zstd, and age layers into a new explicit directory without activating
 a service. Failed S3 delivery can be retried from the durable spool by backup
 ID without capturing or encrypting again. `fetch` verifies a completed S3 set
 and atomically imports it into the durable spool for local restore. Other
-capture drivers and retention still fail explicitly.
+capture drivers and retention still fail explicitly. `restore-mongodb`
+replays into a temporary loopback-only `mongod` with a new dbpath and never
+accepts a service endpoint.
 
 ## Intended interface
 
@@ -32,6 +36,9 @@ savetoa fetch --spool-root /srv/recovery-spool \
 savetoa verify <backup-id>
 savetoa restore --source-root /var/backups/savetoa \
   --target-dir /srv/restore --identity-file /run/restore.age <backup-id>
+savetoa restore-mongodb --source-root /var/backups/savetoa \
+  --target-dir /srv/mongodb-restore-check \
+  --identity-file /run/restore.age <backup-id>
 savetoa prune production-mariadb
 savetoa doctor production-mariadb
 ```
