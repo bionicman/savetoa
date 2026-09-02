@@ -121,6 +121,21 @@ func (spool *Spool) DeliverS3(
 	return set, nil
 }
 
+func (spool *Spool) FetchS3(
+	ctx context.Context,
+	relativePath string,
+	source *s3store.Store,
+) (*localstore.Set, error) {
+	if source == nil {
+		return nil, errors.New("S3 source is required")
+	}
+	set, err := source.Fetch(ctx, relativePath, spool.store)
+	if err != nil {
+		return nil, fmt.Errorf("fetch S3 backup set into spool: %w", err)
+	}
+	return set, nil
+}
+
 func (spool *Spool) DeliverLocal(
 	ctx context.Context,
 	relativePath string,

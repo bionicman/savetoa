@@ -14,7 +14,8 @@ SaveToA coordinates named backup targets. A target selects a capture driver,
 source settings and credentials, transformations, destinations, and retention
 policy.
 .PP
-This release implements physical MariaDB capture, verified local and idempotent S3 delivery, and
+This release implements physical MariaDB capture, verified local storage,
+idempotent S3 delivery and recovery, and
 safe materialization of completed local backup sets. Commands for other capture
 drivers, deletion, and explicit verification fail explicitly until implemented.
 .SH OPTIONS
@@ -38,6 +39,17 @@ optional zstd and age transforms, durable staging, and destination verification.
 Retry an S3 destination from a completed set in the durable spool. Existing
 objects are accepted only when their bytes match, and the completion marker is
 published last. No new capture or encryption is performed.
+.TP
+.B fetch
+.RI [ --spool-root " root" ]
+.I "target s3-source backup-id"
+.br
+Verify a completed S3 set and atomically import it into the durable spool. The
+completion marker and canonical manifest are validated before the payload is
+requested; payload size and checksum are verified before local publication.
+An identical completed local set is reused and a conflict is never replaced.
+The spool root defaults to
+.IR /var/lib/savetoa/spool .
 .TP
 .BI run-group " group"
 Run a configured group of targets.

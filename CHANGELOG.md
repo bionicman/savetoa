@@ -22,6 +22,8 @@ Semantic Versioning after its first stable release.
   materialization into an explicit new directory.
 - Idempotent S3-compatible delivery from the durable spool, with conditional
   writes, byte-verified retries, conflict refusal, and completion-last publication.
+- Verified S3 recovery into an atomically published durable spool set, with
+  bounded metadata, canonical-manifest, identity, size, and checksum checks.
 - Debian packaging, systemd templates, sysusers, and tmpfiles manifests.
 - Architecture, design rationale, security, configuration, and roadmap docs.
 

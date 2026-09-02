@@ -17,6 +17,12 @@ non-canonical paths, traversal, duplicates, links, and special files; a failed
 materialization removes only the destination it created. Restore never starts,
 stops, or replaces a service.
 
+S3 recovery treats every remote byte as untrusted. It validates the requested
+set path before network access, reads the completion marker before manifest and
+payload, requires the manifest's exact canonical encoding, bounds metadata
+reads, and limits payload input to one byte beyond the declared size. An
+invalid or interrupted fetch cannot publish a completed local set.
+
 ## Encryption
 
 Encryption is optional in the product contract and explicit in each target.

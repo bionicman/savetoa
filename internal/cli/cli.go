@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"syscall"
@@ -49,6 +50,7 @@ type mariaDBCapturer interface {
 var plannedCommands = []string{
 	"deliver",
 	"doctor",
+	"fetch",
 	"list",
 	"prune",
 	"restore",
@@ -105,6 +107,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if command == "deliver" {
 		return runDeliver(*configPath, remaining[1:], stdout, stderr)
 	}
+	if command == "fetch" {
+		return runFetch(*configPath, remaining[1:], stdout, stderr)
+	}
 
 	fmt.Fprintf(
 		stderr,
@@ -113,6 +118,92 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		*configPath,
 	)
 	return 2
+}
+
+func runFetch(configPath string, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("fetch", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	spoolRoot := flags.String("spool-root", defaultRunPaths.spool, "absolute path to the destination spool")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 3 {
+		fmt.Fprintln(stderr, "savetoa: fetch requires [--spool-root ROOT] TARGET S3-SOURCE BACKUP-ID")
+		return 2
+	}
+	configuration, err := readConfig(configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: %v\n", err)
+		return 1
+	}
+	targetName, sourceName, backupID := flags.Arg(0), flags.Arg(1), flags.Arg(2)
+	target, ok := configuration.Targets[targetName]
+	if !ok {
+		fmt.Fprintf(stderr, "savetoa: target %q is not configured\n", targetName)
+		return 1
+	}
+	sourceConfig, ok := target.Destinations[sourceName]
+	if !ok {
+		fmt.Fprintf(stderr, "savetoa: destination %q is not configured for target %q\n", sourceName, targetName)
+		return 1
+	}
+	if sourceConfig.Driver != "s3" {
+		fmt.Fprintf(stderr, "savetoa: destination %q is not an S3 source\n", sourceName)
+		return 1
+	}
+	relativePath, err := backupSetRelativePath(configuration.Environment, targetName, backupID)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: invalid backup ID for fetch: %v\n", err)
+		return 1
+	}
+	source, err := openS3Destination(sourceConfig)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: open S3 source %q: %v\n", sourceName, err)
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	locks, err := targetlock.New(defaultRunPaths.locks)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: open target locks: %v\n", err)
+		return 1
+	}
+	defer locks.Close()
+	lock, err := locks.Acquire(ctx, targetName)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: lock target %q: %v\n", targetName, err)
+		return 1
+	}
+	defer lock.Release()
+	staging, err := spool.New(*spoolRoot)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: open spool: %v\n", err)
+		return 1
+	}
+	defer staging.Close()
+	set, err := staging.FetchS3(ctx, relativePath, source)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: fetch failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "target=%s source=%s driver=s3 status=complete backup_id=%s path=%s\n",
+		targetName, sourceName, backupID, set.RelativePath)
+	return 0
+}
+
+func backupSetRelativePath(environment, target, backupID string) (string, error) {
+	if len(backupID) < len("20060102") {
+		return "", errors.New("backup ID does not contain a date")
+	}
+	date, err := time.Parse("20060102", backupID[:8])
+	if err != nil {
+		return "", errors.New("backup ID does not start with a valid UTC date")
+	}
+	relativePath := filepath.Join(environment, target, date.Format("2006"), date.Format("01"), date.Format("02"), backupID)
+	if err := localstore.ValidateSetPath(relativePath); err != nil {
+		return "", err
+	}
+	return relativePath, nil
 }
 
 func runDeliver(configPath string, args []string, stdout, stderr io.Writer) int {
@@ -513,6 +604,7 @@ func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "Commands:")
 	fmt.Fprintln(output, "  run TARGET          capture and deliver one configured target")
 	fmt.Fprintln(output, "  deliver TARGET DESTINATION BACKUP-ID  retry S3 delivery from the spool")
+	fmt.Fprintln(output, "  fetch [--spool-root ROOT] TARGET S3-SOURCE BACKUP-ID  import an S3 set")
 	fmt.Fprintln(output, "  run-group GROUP     run a configured group of targets")
 	fmt.Fprintln(output, "  list                list completed backup sets")
 	fmt.Fprintln(output, "  verify BACKUP-ID    verify a completed backup set")

@@ -3,6 +3,8 @@ package s3store
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -145,6 +147,120 @@ func TestDeliverFailureBeforeMarkerLeavesSetIncomplete(t *testing.T) {
 	}
 }
 
+func TestFetchVerifiesAndAtomicallyImportsCompletedSet(t *testing.T) {
+	client := newFakeClient()
+	remote := &Store{client: client, bucket: "backups", prefix: "savetoa"}
+	set, payload, manifestData, markerData := sourceSet(t)
+	if err := remote.Deliver(context.Background(), set.RelativePath, set, payload, manifestData, markerData); err != nil {
+		t.Fatal(err)
+	}
+
+	destinationRoot := t.TempDir()
+	destination, err := localstore.New(destinationRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	client.gets = nil
+	fetched, err := remote.Fetch(context.Background(), set.RelativePath, destination)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if fetched.RelativePath != set.RelativePath {
+		t.Fatalf("Fetch() path = %q, want %q", fetched.RelativePath, set.RelativePath)
+	}
+	if _, err := destination.Verify(context.Background(), fetched.RelativePath); err != nil {
+		t.Fatalf("Verify(fetched) error = %v", err)
+	}
+	wantGets := []string{
+		remote.key(set.RelativePath, localstore.CompleteFilename),
+		remote.key(set.RelativePath, localstore.ManifestFilename),
+		remote.key(set.RelativePath, set.Manifest.Artifact.Filename),
+	}
+	if strings.Join(client.gets, "\n") != strings.Join(wantGets, "\n") {
+		t.Fatalf("GET order = %#v, want %#v", client.gets, wantGets)
+	}
+
+	client.gets = nil
+	if _, err := remote.Fetch(context.Background(), set.RelativePath, destination); err != nil {
+		t.Fatalf("Fetch(retry) error = %v", err)
+	}
+	if len(client.gets) != 2 {
+		t.Fatalf("idempotent fetch made %d GETs, want metadata only", len(client.gets))
+	}
+}
+
+func TestFetchRejectsCorruptionWithoutPublishingLocalSet(t *testing.T) {
+	tests := map[string]func(*fakeClient, *Store, *localstore.Set){
+		"marker": func(client *fakeClient, remote *Store, set *localstore.Set) {
+			client.objects[remote.key(set.RelativePath, localstore.CompleteFilename)] = []byte("sha256:" + strings.Repeat("0", 64) + "\n")
+		},
+		"payload": func(client *fakeClient, remote *Store, set *localstore.Set) {
+			client.objects[remote.key(set.RelativePath, set.Manifest.Artifact.Filename)] = []byte("changed")
+		},
+	}
+	for name, corrupt := range tests {
+		t.Run(name, func(t *testing.T) {
+			client := newFakeClient()
+			remote := &Store{client: client, bucket: "backups"}
+			set, payload, manifestData, markerData := sourceSet(t)
+			if err := remote.Deliver(context.Background(), set.RelativePath, set, payload, manifestData, markerData); err != nil {
+				t.Fatal(err)
+			}
+			corrupt(client, remote, set)
+			destinationRoot := t.TempDir()
+			destination, err := localstore.New(destinationRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer destination.Close()
+			if _, err := remote.Fetch(context.Background(), set.RelativePath, destination); err == nil {
+				t.Fatal("Fetch(corrupt) succeeded")
+			}
+			if _, err := destination.Load(set.RelativePath); err == nil {
+				t.Fatal("corrupt remote set was published locally")
+			}
+		})
+	}
+}
+
+func TestFetchRejectsInvalidPathBeforeRemoteAccess(t *testing.T) {
+	client := newFakeClient()
+	remote := &Store{client: client, bucket: "backups"}
+	destination, err := localstore.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	if _, err := remote.Fetch(context.Background(), "../escape", destination); err == nil {
+		t.Fatal("Fetch(invalid path) succeeded")
+	}
+	if len(client.gets) != 0 {
+		t.Fatalf("invalid path caused remote reads: %#v", client.gets)
+	}
+}
+
+func TestFetchRejectsNonCanonicalManifest(t *testing.T) {
+	client := newFakeClient()
+	remote := &Store{client: client, bucket: "backups"}
+	set, payload, manifestData, markerData := sourceSet(t)
+	if err := remote.Deliver(context.Background(), set.RelativePath, set, payload, manifestData, markerData); err != nil {
+		t.Fatal(err)
+	}
+	nonCanonical := append([]byte(" "), manifestData...)
+	digest := sha256.Sum256(nonCanonical)
+	client.objects[remote.key(set.RelativePath, localstore.ManifestFilename)] = nonCanonical
+	client.objects[remote.key(set.RelativePath, localstore.CompleteFilename)] = []byte("sha256:" + hex.EncodeToString(digest[:]) + "\n")
+	destination, err := localstore.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	if _, err := remote.Fetch(context.Background(), set.RelativePath, destination); err == nil || !strings.Contains(err.Error(), "not canonical") {
+		t.Fatalf("Fetch(non-canonical) error = %v", err)
+	}
+}
+
 func TestReadCredentialsFailsClosedWithoutLeakingValues(t *testing.T) {
 	secret := "do-not-print-this"
 	tests := []string{
@@ -202,6 +318,7 @@ func sourceSet(t *testing.T) (*localstore.Set, io.ReadSeeker, []byte, []byte) {
 type fakeClient struct {
 	objects map[string][]byte
 	puts    []string
+	gets    []string
 	failKey string
 }
 
@@ -225,7 +342,9 @@ func (client *fakeClient) PutObject(_ context.Context, input *s3.PutObjectInput,
 }
 
 func (client *fakeClient) GetObject(_ context.Context, input *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-	data, ok := client.objects[aws.ToString(input.Key)]
+	key := aws.ToString(input.Key)
+	client.gets = append(client.gets, key)
+	data, ok := client.objects[key]
 	if !ok {
 		return nil, responseError(http.StatusNotFound)
 	}

@@ -241,8 +241,7 @@ func (store *Store) Commit(
 }
 
 func (store *Store) Load(relativePath string) (*Set, error) {
-	parts, err := validateSetPath(relativePath)
-	if err != nil {
+	if err := ValidateSetPath(relativePath); err != nil {
 		return nil, err
 	}
 
@@ -250,14 +249,35 @@ func (store *Store) Load(relativePath string) (*Set, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read completion marker: %w", err)
 	}
-	expectedManifestDigest, err := parseMarker(markerData)
-	if err != nil {
-		return nil, err
-	}
-
 	manifestData, err := store.readRegularFile(filepath.Join(relativePath, manifestFilename), manifest.MaxFileSize)
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
+	}
+	return ValidateMetadata(relativePath, manifestData, markerData)
+}
+
+// ValidateSetPath rejects paths that do not match the backup-set layout.
+func ValidateSetPath(relativePath string) error {
+	_, err := validateSetPath(relativePath)
+	return err
+}
+
+// ValidateMetadata treats manifest and marker bytes as untrusted input and
+// binds them to an already validated backup-set path.
+func ValidateMetadata(relativePath string, manifestData, markerData []byte) (*Set, error) {
+	parts, err := validateSetPath(relativePath)
+	if err != nil {
+		return nil, err
+	}
+	if len(manifestData) > manifest.MaxFileSize {
+		return nil, fmt.Errorf("manifest exceeds %d bytes", manifest.MaxFileSize)
+	}
+	if len(markerData) > maxMarkerSize {
+		return nil, fmt.Errorf("completion marker exceeds %d bytes", maxMarkerSize)
+	}
+	expectedManifestDigest, err := parseMarker(markerData)
+	if err != nil {
+		return nil, err
 	}
 	actualManifestDigest := sha256.Sum256(manifestData)
 	if subtle.ConstantTimeCompare(expectedManifestDigest, actualManifestDigest[:]) != 1 {
@@ -276,7 +296,6 @@ func (store *Store) Load(relativePath string) (*Set, error) {
 		parts[4] != fmt.Sprintf("%02d", started.Day()) {
 		return nil, errors.New("manifest start date does not match backup set path")
 	}
-
 	return &Set{Environment: parts[0], RelativePath: relativePath, Manifest: *value}, nil
 }
 

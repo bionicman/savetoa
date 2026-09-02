@@ -45,6 +45,11 @@ target
 Capture and delivery must be separable. If an offsite destination is
 temporarily unavailable after a valid local artifact exists, a later retry must
 deliver the same backup ID rather than capture a different database state.
+Recovery from S3 performs the reverse storage flow: it reads the completion
+marker first, validates the exact manifest it binds, streams the expected
+payload into a private local partial set, and publishes that set only after its
+size and checksum match. Restore continues to consume only the local-store
+contract.
 
 ## Locking and spool
 

@@ -37,6 +37,21 @@ without recapturing or re-encrypting it with:
 savetoa deliver TARGET S3-DESTINATION BACKUP-ID
 ```
 
+Recover that exact remotely completed set into the durable spool with:
+
+```console
+savetoa fetch [--spool-root ROOT] TARGET S3-SOURCE BACKUP-ID
+```
+
+`fetch` derives the immutable object path from the UTC date prefix in a
+SaveToA-generated backup ID. It reads and validates the completion marker and
+canonical manifest before requesting the payload, then atomically publishes a
+local spool set only after the payload size and SHA-256 match. Repeating a fetch
+verifies and reuses an identical local set; it never replaces a conflicting or
+invalid published path.
+The spool root defaults to `/var/lib/savetoa/spool`; an operator can select a
+different existing absolute root for an isolated recovery exercise.
+
 `restore` does not consult target configuration. It takes a completed local
 backup-store root, backup ID, and new absolute destination explicitly. An
 encrypted set additionally requires a mode-`0600` X25519 identity file.
@@ -95,6 +110,10 @@ match, so a discovered conflict is never overwritten. Endpoints should honor
 `If-None-Match: *` to extend that guarantee to concurrent writers outside this
 SaveToA host. This increment supports payloads through S3's 5-GiB single-PUT
 limit; multipart delivery remains future work.
+
+S3 credentials used by `fetch` require object-read access. No list or delete
+permission is required: the object path is deterministic from the configured
+environment, target, destination prefix, and generated backup ID.
 
 The `age` recipients file is public-key material, not an identity file. It uses
 one X25519 `age1...` recipient per line; blank lines and `#` comments are

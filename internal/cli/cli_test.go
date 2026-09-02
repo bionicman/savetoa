@@ -80,6 +80,25 @@ func TestUnknownCommandIsRejected(t *testing.T) {
 	}
 }
 
+func TestBackupSetRelativePathUsesBackupIDDate(t *testing.T) {
+	path, err := backupSetRelativePath("production", "production-mariadb", "20260902t181123z-6604825f507250fc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join("production", "production-mariadb", "2026", "09", "02", "20260902t181123z-6604825f507250fc")
+	if path != want {
+		t.Fatalf("backupSetRelativePath() = %q, want %q", path, want)
+	}
+}
+
+func TestBackupSetRelativePathRejectsInvalidID(t *testing.T) {
+	for _, backupID := range []string{"short", "20260230t000000z-0000000000000000", "20260902/escape"} {
+		if _, err := backupSetRelativePath("production", "production-mariadb", backupID); err == nil {
+			t.Fatalf("backupSetRelativePath(%q) succeeded", backupID)
+		}
+	}
+}
+
 type pipelineRunner struct {
 	calls int
 }

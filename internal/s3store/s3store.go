@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/bionicman/savetoa/internal/localstore"
+	"github.com/bionicman/savetoa/internal/manifest"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -164,6 +165,105 @@ func (store *Store) Deliver(ctx context.Context, relativePath string, set *local
 		}
 	}
 	return nil
+}
+
+// Fetch verifies one completed remote set and atomically imports it into a
+// local store. Remote data is never exposed as a completed local set until the
+// completion marker, manifest identity, payload size, and checksum all match.
+func (store *Store) Fetch(ctx context.Context, relativePath string, destination *localstore.Store) (*localstore.Set, error) {
+	if ctx == nil {
+		return nil, errors.New("context is required")
+	}
+	if store == nil || store.client == nil || destination == nil {
+		return nil, errors.New("S3 source and local destination are required")
+	}
+	if err := localstore.ValidateSetPath(relativePath); err != nil {
+		return nil, err
+	}
+
+	markerData, err := store.readObject(ctx, store.key(relativePath, localstore.CompleteFilename), 128)
+	if err != nil {
+		return nil, errors.New("read S3 completion marker")
+	}
+	manifestData, err := store.readObject(ctx, store.key(relativePath, localstore.ManifestFilename), manifest.MaxFileSize)
+	if err != nil {
+		return nil, errors.New("read S3 manifest")
+	}
+	remote, err := localstore.ValidateMetadata(relativePath, manifestData, markerData)
+	if err != nil {
+		return nil, fmt.Errorf("validate S3 metadata: %w", err)
+	}
+	canonicalManifest, err := manifest.Marshal(remote.Manifest)
+	if err != nil || !bytes.Equal(canonicalManifest, manifestData) {
+		return nil, errors.New("validate S3 metadata: manifest is not canonical")
+	}
+	if remote.Manifest.Artifact.SizeBytes > MaxObjectSize {
+		return nil, fmt.Errorf("S3 payload exceeds the %d-byte single-object recovery limit", MaxObjectSize)
+	}
+
+	if existing, loadErr := destination.Load(relativePath); loadErr == nil {
+		if !sameManifest(existing.Manifest, remote.Manifest) {
+			return nil, ErrConflict
+		}
+		return destination.Verify(ctx, relativePath)
+	} else if !errors.Is(loadErr, os.ErrNotExist) {
+		// Load wraps filesystem absence; any published path that cannot be
+		// validated must not be replaced by a fetch.
+		return nil, fmt.Errorf("inspect local fetch destination: %w", loadErr)
+	}
+
+	payload, err := store.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(store.bucket),
+		Key:    aws.String(store.key(relativePath, remote.Manifest.Artifact.Filename)),
+	})
+	if err != nil {
+		return nil, errors.New("read S3 payload")
+	}
+	defer payload.Body.Close()
+	if payload.ContentLength != nil && *payload.ContentLength != remote.Manifest.Artifact.SizeBytes {
+		return nil, errors.New("S3 payload size does not match manifest")
+	}
+	limited := io.LimitReader(payload.Body, remote.Manifest.Artifact.SizeBytes+1)
+	imported, err := destination.Commit(ctx, remote.Environment, remote.Manifest, limited)
+	if errors.Is(err, localstore.ErrSetExists) {
+		existing, verifyErr := destination.Verify(ctx, relativePath)
+		if verifyErr != nil {
+			return nil, fmt.Errorf("verify concurrently imported set: %w", verifyErr)
+		}
+		if !sameManifest(existing.Manifest, remote.Manifest) {
+			return nil, ErrConflict
+		}
+		return existing, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("import S3 backup set: %w", err)
+	}
+	return imported, nil
+}
+
+func (store *Store) readObject(ctx context.Context, key string, limit int64) ([]byte, error) {
+	result, err := store.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(store.bucket), Key: aws.String(key)})
+	if err != nil {
+		return nil, err
+	}
+	defer result.Body.Close()
+	if result.ContentLength != nil && *result.ContentLength > limit {
+		return nil, errors.New("S3 object exceeds size limit")
+	}
+	data, err := io.ReadAll(io.LimitReader(result.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, errors.New("S3 object exceeds size limit")
+	}
+	return data, nil
+}
+
+func sameManifest(left, right manifest.Manifest) bool {
+	leftData, leftErr := manifest.Marshal(left)
+	rightData, rightErr := manifest.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftData, rightData)
 }
 
 func (store *Store) key(relativePath, filename string) string {

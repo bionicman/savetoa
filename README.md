@@ -11,21 +11,24 @@ does not emulate floppy media and is not tied to a particular application.
 
 SaveToA is an early implementation. Strict config and manifest v1 contracts,
 target locking, streaming X25519 `age` encryption, durable spool, and verified
-local and idempotent S3 delivery exist. MariaDB `run` performs replica health gates, physical
+local storage and idempotent S3 delivery and recovery exist. MariaDB `run` performs replica health gates, physical
 capture, replica-thread recovery, preparation, tar/zstd packaging, optional
 age encryption, durable staging, and delivery to every configured local or S3 destination. MariaDB `doctor`
 performs the same read-only replica, GTID, lag, and tool-version gates without
 capturing data. `restore` verifies a completed local set and safely materializes
 its tar, zstd, and age layers into a new explicit directory without activating
 a service. Failed S3 delivery can be retried from the durable spool by backup
-ID without capturing or encrypting again. Other capture drivers and retention
-still fail explicitly.
+ID without capturing or encrypting again. `fetch` verifies a completed S3 set
+and atomically imports it into the durable spool for local restore. Other
+capture drivers and retention still fail explicitly.
 
 ## Intended interface
 
 ```console
 savetoa run production-mariadb
 savetoa deliver production-mariadb offsite <backup-id>
+savetoa fetch --spool-root /srv/recovery-spool \
+  production-mariadb offsite <backup-id>
 savetoa verify <backup-id>
 savetoa restore --source-root /var/backups/savetoa \
   --target-dir /srv/restore --identity-file /run/restore.age <backup-id>
