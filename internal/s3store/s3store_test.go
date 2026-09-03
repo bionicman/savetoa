@@ -8,12 +8,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/bionicman/savetoa/internal/localstore"
 	"github.com/bionicman/savetoa/internal/manifest"
@@ -144,6 +146,64 @@ func TestDeliverFailureBeforeMarkerLeavesSetIncomplete(t *testing.T) {
 	}
 	if _, ok := client.objects[set.RelativePath+"/complete"]; ok {
 		t.Fatal("completion marker was published after manifest failure")
+	}
+}
+
+func TestListAndDeleteCompletedIgnoreIncompleteAndRemoveMarkerFirst(t *testing.T) {
+	client := newFakeClient()
+	store := &Store{client: client, bucket: "backups", prefix: "savetoa"}
+	set, payload, manifestData, markerData := sourceSet(t)
+	if err := store.Deliver(context.Background(), set.RelativePath, set, payload, manifestData, markerData); err != nil {
+		t.Fatal(err)
+	}
+	client.objects["savetoa/production/database/2026/09/03/incomplete/payload.tar"] = []byte("incomplete")
+	sets, err := store.ListCompleted(context.Background(), "production", "database")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sets) != 1 || sets[0].RelativePath != set.RelativePath {
+		t.Fatalf("completed sets = %#v", sets)
+	}
+	if err := store.DeleteCompleted(context.Background(), sets[0]); err != nil {
+		t.Fatal(err)
+	}
+	wantDeletes := []string{
+		store.key(set.RelativePath, localstore.CompleteFilename),
+		store.key(set.RelativePath, set.Manifest.Artifact.Filename),
+		store.key(set.RelativePath, localstore.ManifestFilename),
+	}
+	if strings.Join(client.deletes, "\n") != strings.Join(wantDeletes, "\n") {
+		t.Fatalf("delete order = %#v, want %#v", client.deletes, wantDeletes)
+	}
+	if _, exists := client.objects["savetoa/production/database/2026/09/03/incomplete/payload.tar"]; !exists {
+		t.Fatal("incomplete S3 set was modified")
+	}
+}
+
+func TestListCompletedFailsClosedBeforeDeletingInvalidSet(t *testing.T) {
+	client := newFakeClient()
+	store := &Store{client: client, bucket: "backups"}
+	set, payload, manifestData, markerData := sourceSet(t)
+	if err := store.Deliver(context.Background(), set.RelativePath, set, payload, manifestData, markerData); err != nil {
+		t.Fatal(err)
+	}
+	client.objects[store.key(set.RelativePath, localstore.CompleteFilename)] = []byte("invalid\n")
+	if _, err := store.ListCompleted(context.Background(), "production", "database"); err == nil {
+		t.Fatal("invalid completed S3 set was accepted")
+	}
+	if len(client.deletes) != 0 {
+		t.Fatalf("failed scan deleted objects: %#v", client.deletes)
+	}
+}
+
+func TestListCompletedReportsOnlySafeHTTPStatus(t *testing.T) {
+	client := newFakeClient()
+	client.listError = responseError(http.StatusForbidden)
+	store := &Store{client: client, bucket: "backups"}
+
+	_, err := store.ListCompleted(context.Background(), "production", "database")
+	if err == nil || err.Error() != "list S3 retention candidates: S3 returned HTTP 403" {
+		t.Fatalf("ListCompleted() error = %v", err)
 	}
 }
 
@@ -316,10 +376,41 @@ func sourceSet(t *testing.T) (*localstore.Set, io.ReadSeeker, []byte, []byte) {
 }
 
 type fakeClient struct {
-	objects map[string][]byte
-	puts    []string
-	gets    []string
-	failKey string
+	objects   map[string][]byte
+	puts      []string
+	gets      []string
+	deletes   []string
+	failKey   string
+	listError error
+}
+
+func (client *fakeClient) ListObjectsV2(_ context.Context, input *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	if client.listError != nil {
+		return nil, client.listError
+	}
+	prefix := aws.ToString(input.Prefix)
+	keys := make([]string, 0, len(client.objects))
+	for key := range client.objects {
+		if strings.HasPrefix(key, prefix) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	objects := make([]types.Object, len(keys))
+	for index, key := range keys {
+		objects[index] = types.Object{Key: aws.String(key), Size: aws.Int64(int64(len(client.objects[key])))}
+	}
+	return &s3.ListObjectsV2Output{Contents: objects, IsTruncated: aws.Bool(false)}, nil
+}
+
+func (client *fakeClient) DeleteObject(_ context.Context, input *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	key := aws.ToString(input.Key)
+	client.deletes = append(client.deletes, key)
+	if key == client.failKey {
+		return nil, errors.New("injected delete failure")
+	}
+	delete(client.objects, key)
+	return &s3.DeleteObjectOutput{}, nil
 }
 
 func newFakeClient() *fakeClient { return &fakeClient{objects: make(map[string][]byte)} }

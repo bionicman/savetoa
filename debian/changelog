@@ -1,3 +1,9 @@
+savetoa (0.1.0-11) unstable; urgency=medium
+
+  * Add fail-closed local and S3 retention with a separate maintenance identity.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Wed, 02 Sep 2026 23:35:46 +0000
+
 savetoa (0.1.0-10) unstable; urgency=medium
 
   * Add Redis BGSAVE capture and disposable RDB restore verification.

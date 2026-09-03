@@ -97,13 +97,14 @@ type Encryption struct {
 }
 
 type Destination struct {
-	Driver      string         `yaml:"driver"`
-	Path        string         `yaml:"path,omitempty"`
-	Credentials *FileReference `yaml:"credentials,omitempty"`
-	Endpoint    string         `yaml:"endpoint,omitempty"`
-	Region      string         `yaml:"region,omitempty"`
-	Bucket      string         `yaml:"bucket,omitempty"`
-	Prefix      string         `yaml:"prefix,omitempty"`
+	Driver                 string         `yaml:"driver"`
+	Path                   string         `yaml:"path,omitempty"`
+	Credentials            *FileReference `yaml:"credentials,omitempty"`
+	MaintenanceCredentials *FileReference `yaml:"maintenance_credentials,omitempty"`
+	Endpoint               string         `yaml:"endpoint,omitempty"`
+	Region                 string         `yaml:"region,omitempty"`
+	Bucket                 string         `yaml:"bucket,omitempty"`
+	Prefix                 string         `yaml:"prefix,omitempty"`
 }
 
 type Retention struct {
@@ -372,6 +373,11 @@ func (target Target) validateCommon() error {
 		if err := destination.validate(); err != nil {
 			return fmt.Errorf("destination %q: %w", name, err)
 		}
+		if target.Retention != nil && destination.Driver == "s3" {
+			if destination.MaintenanceCredentials == nil {
+				return fmt.Errorf("destination %q: maintenance_credentials.file is required when retention is configured", name)
+			}
+		}
 	}
 	if target.Retention != nil {
 		if err := target.Retention.validate(); err != nil {
@@ -391,7 +397,7 @@ func (destination Destination) validate() error {
 		if err := validateAbsolutePath("path", destination.Path, true); err != nil {
 			return err
 		}
-		if destination.Credentials != nil || destination.Endpoint != "" || destination.Region != "" || destination.Bucket != "" || destination.Prefix != "" {
+		if destination.Credentials != nil || destination.MaintenanceCredentials != nil || destination.Endpoint != "" || destination.Region != "" || destination.Bucket != "" || destination.Prefix != "" {
 			return errors.New("local destination contains S3-only fields")
 		}
 	case "s3":
@@ -403,6 +409,14 @@ func (destination Destination) validate() error {
 		}
 		if err := destination.Credentials.validate("credentials.file"); err != nil {
 			return err
+		}
+		if destination.MaintenanceCredentials != nil {
+			if err := destination.MaintenanceCredentials.validate("maintenance_credentials.file"); err != nil {
+				return err
+			}
+			if destination.MaintenanceCredentials.File == destination.Credentials.File {
+				return errors.New("maintenance credentials must be separate from upload credentials")
+			}
 		}
 		endpoint, err := url.Parse(destination.Endpoint)
 		if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Path != "" && endpoint.Path != "/") {

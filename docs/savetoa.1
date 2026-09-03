@@ -15,8 +15,8 @@ source settings and credentials, transformations, destinations, and retention
 policy.
 .PP
 This release implements physical MariaDB, full+oplog MongoDB, and fresh-RDB Redis capture, verified local storage,
-idempotent S3 delivery and recovery, and
-safe materialization of completed local backup sets. Deletion and explicit
+idempotent S3 delivery and recovery, target-scoped retention, and
+safe materialization of completed local backup sets. Standalone listing and
 verification commands fail explicitly until implemented.
 .SH OPTIONS
 .TP
@@ -92,8 +92,14 @@ redis-server inside the explicit target directory. AOF and automatic saves are
 disabled, no database endpoint is accepted, and the process is stopped before
 success is reported.
 .TP
-.BI prune " target"
-Apply the configured retention policy to completed backup sets.
+.B prune
+.RI [ --spool-root " root" ]
+.I target
+.br
+Apply the configured UTC daily, ISO-weekly, and monthly retention policy to
+the durable spool and every target destination. Every repository is validated
+and planned before deletion begins. Incomplete sets are ignored; an invalid
+completed set aborts planning. Deletion removes the completion marker first.
 .TP
 .BI doctor " target"
 Validate a target and its dependencies without capturing data.
@@ -107,6 +113,9 @@ Protected source and destination credential files.
 .TP
 .I /etc/savetoa/recipients.d/
 Client-side encryption recipients.
+.TP
+.I /etc/savetoa/maintenance-credentials.d/
+Protected S3 list/delete credentials, inaccessible to backup units.
 .TP
 .I /var/lib/savetoa/
 Persistent state, work directories, and delivery spool.

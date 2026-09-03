@@ -3,6 +3,7 @@ Description=SaveToA backup target %i
 Documentation=https://github.com/bionicman/savetoa
 After=network-online.target
 Wants=network-online.target
+OnSuccess=savetoa-prune@%i.service
 
 [Service]
 Type=oneshot
@@ -12,7 +13,11 @@ ExecStart=/usr/bin/savetoa --config /etc/savetoa/config.yml run %i
 ConfigurationDirectory=savetoa
 StateDirectory=savetoa
 RuntimeDirectory=savetoa
-UMask=0077
+ConfigurationDirectoryMode=0750
+StateDirectoryMode=0770
+RuntimeDirectoryMode=0770
+RuntimeDirectoryPreserve=yes
+UMask=0007
 
 NoNewPrivileges=yes
 PrivateDevices=yes
@@ -25,3 +30,4 @@ ProtectKernelTunables=yes
 ProtectSystem=strict
 ReadOnlyPaths=/etc/savetoa
 ReadWritePaths=/var/backups/savetoa
+InaccessiblePaths=/etc/savetoa/maintenance-credentials.d

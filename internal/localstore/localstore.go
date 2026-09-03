@@ -108,6 +108,105 @@ type Set struct {
 	Manifest     manifest.Manifest
 }
 
+// ListCompleted returns only sets with a valid completion marker and manifest
+// below one environment and target. Published directories without a marker are
+// ignored; a marker that exists but cannot be validated fails the whole scan.
+func (store *Store) ListCompleted(environment, target string) ([]Set, error) {
+	if store == nil || store.root == nil {
+		return nil, errors.New("local destination is closed")
+	}
+	if err := validateComponent("environment", environment); err != nil {
+		return nil, err
+	}
+	if err := validateComponent("target", target); err != nil {
+		return nil, err
+	}
+	base := filepath.Join(environment, target)
+	if _, err := store.root.Lstat(base); errors.Is(err, os.ErrNotExist) {
+		return []Set{}, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("inspect local target prefix: %w", err)
+	}
+	var sets []Set
+	err := fs.WalkDir(store.root.FS(), base, func(relativePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if !entry.IsDir() || relativePath == base {
+			return nil
+		}
+		depth := len(strings.Split(filepath.Clean(relativePath), string(filepath.Separator)))
+		if depth < 6 {
+			return nil
+		}
+		if depth > 6 {
+			return fs.SkipDir
+		}
+		markerPath := filepath.Join(relativePath, completeFilename)
+		if _, err := store.root.Lstat(markerPath); errors.Is(err, os.ErrNotExist) {
+			return fs.SkipDir
+		} else if err != nil {
+			return fmt.Errorf("inspect completion marker: %w", err)
+		}
+		set, err := store.Load(relativePath)
+		if err != nil {
+			return fmt.Errorf("validate completed set %q: %w", relativePath, err)
+		}
+		sets = append(sets, *set)
+		return fs.SkipDir
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan completed local sets: %w", err)
+	}
+	return sets, nil
+}
+
+// DeleteCompleted invalidates a selected set by durably removing its marker
+// first, then removes only the three files named by the validated set.
+func (store *Store) DeleteCompleted(ctx context.Context, selected Set) error {
+	if ctx == nil {
+		return errors.New("context is required")
+	}
+	if store == nil || store.root == nil {
+		return errors.New("local destination is closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("delete completed local set: %w", err)
+	}
+	current, err := store.Load(selected.RelativePath)
+	if err != nil {
+		return fmt.Errorf("revalidate completed local set: %w", err)
+	}
+	selectedManifest, selectedErr := manifest.Marshal(selected.Manifest)
+	currentManifest, currentErr := manifest.Marshal(current.Manifest)
+	if selectedErr != nil || currentErr != nil || !bytes.Equal(selectedManifest, currentManifest) {
+		return errors.New("completed local set changed after retention planning")
+	}
+	markerPath := filepath.Join(selected.RelativePath, completeFilename)
+	if err := store.root.Remove(markerPath); err != nil {
+		return fmt.Errorf("remove local completion marker: %w", err)
+	}
+	if err := store.syncDirectory(selected.RelativePath); err != nil {
+		return fmt.Errorf("persist local completion marker removal: %w", err)
+	}
+	for _, filename := range []string{selected.Manifest.Artifact.Filename, manifestFilename} {
+		if err := store.root.Remove(filepath.Join(selected.RelativePath, filename)); err != nil {
+			return fmt.Errorf("remove local backup-set file: %w", err)
+		}
+	}
+	parent := filepath.Dir(selected.RelativePath)
+	if err := store.root.Remove(selected.RelativePath); err != nil {
+		return fmt.Errorf("remove local backup-set directory: %w", err)
+	}
+	if err := store.syncDirectory(parent); err != nil {
+		return fmt.Errorf("persist local backup-set deletion: %w", err)
+	}
+	return nil
+}
+
 func New(rootPath string) (*Store, error) {
 	if rootPath == "" || !filepath.IsAbs(rootPath) || filepath.Clean(rootPath) != rootPath {
 		return nil, errors.New("local destination must be a clean absolute path")
@@ -185,7 +284,7 @@ func (store *Store) Commit(
 	}
 	partialBase := "." + value.BackupID + ".partial-" + suffix
 	partialPath := filepath.Join(parent, partialBase)
-	if err := store.root.Mkdir(partialPath, 0o700); err != nil {
+	if err := store.root.Mkdir(partialPath, 0o770); err != nil {
 		return nil, fmt.Errorf("create partial backup set: %w", err)
 	}
 	if err := store.syncDirectory(parent); err != nil {
@@ -390,7 +489,7 @@ func (store *Store) ensureHierarchy(relativePath string) error {
 	for _, component := range strings.Split(relativePath, string(filepath.Separator)) {
 		parent := current
 		current = filepath.Join(current, component)
-		err := store.root.Mkdir(current, 0o700)
+		err := store.root.Mkdir(current, 0o770)
 		if err == nil {
 			if err := store.syncDirectory(parent); err != nil {
 				return fmt.Errorf("persist directory %q: %w", current, err)
@@ -418,7 +517,7 @@ func (store *Store) writeExclusive(
 	reader io.Reader,
 ) (int64, []byte, error) {
 	finalName := filepath.Join(directory, filename)
-	file, err := store.root.OpenFile(finalName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := store.root.OpenFile(finalName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o660)
 	if err != nil {
 		return 0, nil, err
 	}

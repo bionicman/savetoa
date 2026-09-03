@@ -141,3 +141,23 @@ Redis restore verification likewise accepts no service endpoint. It starts a
 temporary loopback-only `redis-server` against the materialized RDB with AOF
 and automatic saves disabled, waits for a successful load and PING, then stops
 the process cleanly.
+
+## Retention boundary
+
+Retention is target-scoped and runs under the same cross-process target lock as
+capture, delivery, and fetch. It first discovers and validates completed sets
+in the spool and every configured destination, then builds every repository's
+plan before deleting anything. An invalid completion marker or manifest aborts
+the entire planning phase. Published directories and S3 prefixes without a
+valid completion marker are ignored.
+
+Daily buckets use UTC calendar dates, weekly buckets use ISO weeks, and monthly
+buckets use UTC calendar months. The newest completed set in each configured
+bucket is retained; the union of daily, weekly, and monthly selections wins.
+Each repository is planned independently because delivery history may differ.
+
+Deletion removes the completion marker first and then only the payload and
+manifest named by the revalidated set. A crash or remote error can therefore
+leave harmless incomplete remnants, but cannot leave a partially deleted set
+visible as complete. Unknown local files and unrelated S3 objects are never
+recursively removed.

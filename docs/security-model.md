@@ -46,13 +46,19 @@ replacement for client-side encryption.
 
 ## Execution identity
 
-The Debian package creates an unprivileged `savetoa` account. Package
+The Debian package creates unprivileged `savetoa` and `savetoa-maintenance`
+accounts. Package
 installation does not grant access to a database datadir, socket, secrets, or
 remote storage. A consumer may add narrowly scoped supplementary groups or a
 reviewed systemd drop-in for a particular target after validating the native
 backup tool's actual permission requirements.
 
 The generic YAML configuration must never offer a `run_as: root` switch.
+
+The backup service cannot access `/etc/savetoa/maintenance-credentials.d`.
+The maintenance service cannot access source/upload credentials or encryption
+recipients. They share group-writable completed-set roots and the target-lock
+directory, but database filesystem ACLs remain assigned only to `savetoa`.
 
 MongoDB credentials contain only a password in a mode-0600 file. Health checks
 use a direct official-driver connection to the configured member, and native
@@ -83,7 +89,9 @@ separate bounded cleanup context to attempt to resume the replica SQL thread.
 
 ## Retention
 
-Retention operates only on valid completed sets. Backup upload credentials and
-repository-maintenance credentials should be separable. S3 versioning and
-Object Lock may provide an additional immutability layer when the provider
-supports them.
+Retention operates only on sets whose completion marker binds a valid
+manifest. It validates all repository plans before deletion and revalidates a
+set immediately before modifying it. Marker-first deletion makes any
+interrupted cleanup invisible to restore and future retention. S3 upload and
+maintenance credential paths must be distinct. S3 versioning and Object Lock
+may provide an additional immutability layer when the provider supports them.

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,6 +50,8 @@ type Options struct {
 type objectAPI interface {
 	PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+	DeleteObject(context.Context, *s3.DeleteObjectInput, ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 }
 
 type Store struct {
@@ -166,6 +169,124 @@ func (store *Store) Deliver(ctx context.Context, relativePath string, set *local
 	}
 	return nil
 }
+
+// ListCompleted returns only remote sets with a valid completion marker and
+// manifest. Objects belonging to incomplete sets are deliberately ignored.
+func (store *Store) ListCompleted(ctx context.Context, environment, target string) ([]localstore.Set, error) {
+	if ctx == nil {
+		return nil, errors.New("context is required")
+	}
+	if store == nil || store.client == nil {
+		return nil, errors.New("S3 destination is required")
+	}
+	probe := path.Join(environment, target, "2000", "01", "01", "probe")
+	if err := localstore.ValidateSetPath(probe); err != nil {
+		return nil, fmt.Errorf("validate S3 retention scope: %w", err)
+	}
+	prefix := store.key(path.Join(environment, target), "") + "/"
+	var markerKeys []string
+	var continuation *string
+	for {
+		result, err := store.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket: store.bucketPointer(), Prefix: aws.String(prefix), ContinuationToken: continuation,
+		})
+		if err != nil {
+			return nil, sanitizedS3Error("list S3 retention candidates", err)
+		}
+		for _, object := range result.Contents {
+			key := aws.ToString(object.Key)
+			if strings.HasSuffix(key, "/"+localstore.CompleteFilename) {
+				markerKeys = append(markerKeys, key)
+			}
+		}
+		if !aws.ToBool(result.IsTruncated) {
+			break
+		}
+		if result.NextContinuationToken == nil || *result.NextContinuationToken == "" ||
+			(continuation != nil && *result.NextContinuationToken == *continuation) {
+			return nil, errors.New("S3 retention listing returned an invalid continuation token")
+		}
+		continuation = result.NextContinuationToken
+	}
+	sort.Strings(markerKeys)
+	sets := make([]localstore.Set, 0, len(markerKeys))
+	for _, markerKey := range markerKeys {
+		relativePath, ok := store.relativeSetPath(markerKey)
+		if !ok {
+			continue
+		}
+		markerData, err := store.readObject(ctx, markerKey, 128)
+		if err != nil {
+			return nil, errors.New("read S3 retention completion marker")
+		}
+		manifestData, err := store.readObject(ctx, store.key(relativePath, localstore.ManifestFilename), manifest.MaxFileSize)
+		if err != nil {
+			return nil, errors.New("read S3 retention manifest")
+		}
+		set, err := localstore.ValidateMetadata(relativePath, manifestData, markerData)
+		if err != nil {
+			return nil, fmt.Errorf("validate completed S3 set %q: %w", relativePath, err)
+		}
+		if set.Environment != environment || set.Manifest.Target != target {
+			return nil, errors.New("completed S3 set escaped retention scope")
+		}
+		sets = append(sets, *set)
+	}
+	return sets, nil
+}
+
+// DeleteCompleted revalidates a planned set, deletes its completion marker
+// first, and then deletes only its named payload and manifest objects.
+func (store *Store) DeleteCompleted(ctx context.Context, selected localstore.Set) error {
+	if ctx == nil {
+		return errors.New("context is required")
+	}
+	if store == nil || store.client == nil {
+		return errors.New("S3 destination is required")
+	}
+	markerKey := store.key(selected.RelativePath, localstore.CompleteFilename)
+	markerData, err := store.readObject(ctx, markerKey, 128)
+	if err != nil {
+		return errors.New("revalidate S3 completion marker")
+	}
+	manifestKey := store.key(selected.RelativePath, localstore.ManifestFilename)
+	manifestData, err := store.readObject(ctx, manifestKey, manifest.MaxFileSize)
+	if err != nil {
+		return errors.New("revalidate S3 manifest")
+	}
+	current, err := localstore.ValidateMetadata(selected.RelativePath, manifestData, markerData)
+	if err != nil {
+		return fmt.Errorf("revalidate completed S3 set: %w", err)
+	}
+	selectedManifest, selectedErr := manifest.Marshal(selected.Manifest)
+	currentManifest, currentErr := manifest.Marshal(current.Manifest)
+	if selectedErr != nil || currentErr != nil || !bytes.Equal(selectedManifest, currentManifest) {
+		return errors.New("completed S3 set changed after retention planning")
+	}
+	for _, key := range []string{markerKey, store.key(selected.RelativePath, selected.Manifest.Artifact.Filename), manifestKey} {
+		if _, err := store.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: store.bucketPointer(), Key: aws.String(key)}); err != nil {
+			return errors.New("delete S3 backup-set object")
+		}
+	}
+	return nil
+}
+
+func (store *Store) relativeSetPath(markerKey string) (string, bool) {
+	rootPrefix := ""
+	if store.prefix != "" {
+		rootPrefix = strings.TrimSuffix(store.prefix, "/") + "/"
+	}
+	if !strings.HasPrefix(markerKey, rootPrefix) || !strings.HasSuffix(markerKey, "/"+localstore.CompleteFilename) {
+		return "", false
+	}
+	relativePath := strings.TrimSuffix(strings.TrimPrefix(markerKey, rootPrefix), "/"+localstore.CompleteFilename)
+	if err := localstore.ValidateSetPath(relativePath); err != nil {
+		return "", false
+	}
+	return relativePath, true
+}
+
+func (store *Store) bucketPointer() *string { return aws.String(store.bucket) }
 
 // Fetch verifies one completed remote set and atomically imports it into a
 // local store. Remote data is never exposed as a completed local set until the
@@ -356,4 +477,11 @@ func statusCode(err error) int {
 		return responseError.HTTPStatusCode()
 	}
 	return 0
+}
+
+func sanitizedS3Error(operation string, err error) error {
+	if status := statusCode(err); status != 0 {
+		return fmt.Errorf("%s: S3 returned HTTP %d", operation, status)
+	}
+	return errors.New(operation)
 }

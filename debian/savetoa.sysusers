@@ -1,2 +1,4 @@
 g savetoa -
 u savetoa - "SaveToA backup service" /var/lib/savetoa /usr/sbin/nologin
+u savetoa-maintenance - "SaveToA retention service" /nonexistent /usr/sbin/nologin
+m savetoa-maintenance savetoa

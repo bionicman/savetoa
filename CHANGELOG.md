@@ -28,6 +28,8 @@ Semantic Versioning after its first stable release.
   common pipeline, and replay verification in a disposable local mongod.
 - Redis read-only replica health gates, fresh BGSAVE/RDB capture through the
   common pipeline, and load verification in a disposable local redis-server.
+- Fail-closed GFS retention across the spool, local destinations, and S3, with
+  marker-first deletion and separate maintenance credentials and execution identity.
 - Debian packaging, systemd templates, sysusers, and tmpfiles manifests.
 - Architecture, design rationale, security, configuration, and roadmap docs.
 

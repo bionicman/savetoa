@@ -161,6 +161,13 @@ S3 credentials used by `fetch` require object-read access. No list or delete
 permission is required: the object path is deterministic from the configured
 environment, target, destination prefix, and generated backup ID.
 
+When a target has retention, every S3 destination additionally requires a
+different `maintenance_credentials.file`. Its strict YAML shape is the same as
+the upload credentials, but the identity needs list, metadata-read, and object-
+delete access. The path must differ from the upload credential path. Backup
+units cannot access the maintenance credential directory, and prune units
+cannot access source, upload, or recipient files.
+
 The `age` recipients file is public-key material, not an identity file. It uses
 one X25519 `age1...` recipient per line; blank lines and `#` comments are
 allowed. Private identities, SSH recipients, and plugin recipients fail
@@ -168,6 +175,11 @@ closed.
 
 Retention is optional. When present, its daily, weekly, and monthly counts
 must be non-negative and at least one completed backup must be retained.
+`prune [--spool-root ROOT] TARGET` evaluates the durable spool and every target
+destination independently. It keeps the newest completed set in each of the
+newest configured UTC-day, ISO-week, and UTC-month buckets; the union of those
+sets is retained. Incomplete sets are ignored. A corrupt completed set aborts
+planning before any repository is modified.
 
 ## Groups
 
@@ -189,4 +201,7 @@ implemented. A group is not a distributed transaction.
 
 Scheduling is intentionally outside the YAML contract. A Debian installation
 provides `savetoa@.service` and `savetoa@.timer`; configuration management
-creates and enables instances with the desired `OnCalendar` override.
+creates and enables instances with the desired `OnCalendar` override. A
+successful `savetoa@TARGET.service` triggers `savetoa-prune@TARGET.service`.
+Prune has no independent timer and is a successful no-op when the target has no
+retention policy.

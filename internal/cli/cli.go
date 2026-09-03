@@ -25,6 +25,7 @@ import (
 	"github.com/bionicman/savetoa/internal/manifest"
 	"github.com/bionicman/savetoa/internal/mariadb"
 	"github.com/bionicman/savetoa/internal/mongodb"
+	prunepkg "github.com/bionicman/savetoa/internal/prune"
 	redisdriver "github.com/bionicman/savetoa/internal/redis"
 	"github.com/bionicman/savetoa/internal/restore"
 	"github.com/bionicman/savetoa/internal/s3store"
@@ -129,6 +130,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if command == "fetch" {
 		return runFetch(*configPath, remaining[1:], stdout, stderr)
 	}
+	if command == "prune" {
+		return runPrune(*configPath, remaining[1:], stdout, stderr)
+	}
 
 	fmt.Fprintf(
 		stderr,
@@ -137,6 +141,114 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		*configPath,
 	)
 	return 2
+}
+
+func runPrune(configPath string, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("prune", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	spoolRoot := flags.String("spool-root", defaultRunPaths.spool, "absolute path to the durable spool")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintln(stderr, "savetoa: prune requires [--spool-root ROOT] TARGET")
+		return 2
+	}
+	configuration, err := readConfig(configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: %v\n", err)
+		return 1
+	}
+	targetName := flags.Arg(0)
+	target, ok := configuration.Targets[targetName]
+	if !ok {
+		fmt.Fprintf(stderr, "savetoa: target %q is not configured\n", targetName)
+		return 1
+	}
+	if target.Retention == nil {
+		fmt.Fprintf(stdout, "target=%s status=skipped reason=no-retention-policy\n", targetName)
+		return 0
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	locks, err := targetlock.New(defaultRunPaths.locks)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: open target locks: %v\n", err)
+		return 1
+	}
+	defer locks.Close()
+	lock, err := locks.Acquire(ctx, targetName)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: lock target %q: %v\n", targetName, err)
+		return 1
+	}
+	defer lock.Release()
+
+	var localStores []*localstore.Store
+	defer func() {
+		for _, store := range localStores {
+			_ = store.Close()
+		}
+	}()
+	repositories := make([]prunepkg.Repository, 0, len(target.Destinations)+1)
+	identities := make(map[string]string, len(target.Destinations)+1)
+	openLocal := func(name, root string) bool {
+		identity := "local:" + root
+		if existing, duplicate := identities[identity]; duplicate {
+			fmt.Fprintf(stderr, "savetoa: retention repositories %q and %q use the same local root\n", existing, name)
+			return false
+		}
+		store, openErr := localstore.New(root)
+		if openErr != nil {
+			fmt.Fprintf(stderr, "savetoa: open retention repository %q: %v\n", name, openErr)
+			return false
+		}
+		identities[identity] = name
+		localStores = append(localStores, store)
+		repositories = append(repositories, &prunepkg.LocalRepository{RepositoryName: name, Store: store})
+		return true
+	}
+	if !openLocal("spool", *spoolRoot) {
+		return 1
+	}
+	destinationNames := make([]string, 0, len(target.Destinations))
+	for name := range target.Destinations {
+		destinationNames = append(destinationNames, name)
+	}
+	slices.Sort(destinationNames)
+	for _, name := range destinationNames {
+		destination := target.Destinations[name]
+		switch destination.Driver {
+		case "local":
+			if !openLocal(name, destination.Path) {
+				return 1
+			}
+		case "s3":
+			identity := strings.Join([]string{"s3", destination.Endpoint, destination.Region, destination.Bucket, destination.Prefix}, "\x00")
+			if existing, duplicate := identities[identity]; duplicate {
+				fmt.Fprintf(stderr, "savetoa: retention repositories %q and %q use the same S3 prefix\n", existing, name)
+				return 1
+			}
+			store, openErr := openS3MaintenanceDestination(destination)
+			if openErr != nil {
+				fmt.Fprintf(stderr, "savetoa: open retention repository %q: %v\n", name, openErr)
+				return 1
+			}
+			identities[identity] = name
+			repositories = append(repositories, &prunepkg.S3Repository{RepositoryName: name, Store: store})
+		}
+	}
+	results, err := prunepkg.Execute(ctx, configuration.Environment, targetName, *target.Retention, repositories)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: prune %q failed: %v\n", targetName, err)
+		return 1
+	}
+	for _, result := range results {
+		fmt.Fprintf(stdout, "target=%s repository=%s status=complete kept=%d pruned=%d\n",
+			targetName, result.Repository, result.Kept, result.Pruned)
+	}
+	return 0
 }
 
 func runRedisRestore(args []string, stdout, stderr io.Writer) int {
@@ -352,6 +464,20 @@ func openS3Destination(destination config.Destination) (*s3store.Store, error) {
 		return nil, errors.New("S3 credentials file is required")
 	}
 	credentials, err := s3store.ReadCredentialsFile(destination.Credentials.File)
+	if err != nil {
+		return nil, err
+	}
+	return s3store.New(s3store.Options{
+		Endpoint: destination.Endpoint, Region: destination.Region, Bucket: destination.Bucket,
+		Prefix: destination.Prefix, Credentials: credentials,
+	})
+}
+
+func openS3MaintenanceDestination(destination config.Destination) (*s3store.Store, error) {
+	if destination.MaintenanceCredentials == nil {
+		return nil, errors.New("S3 maintenance credentials file is required")
+	}
+	credentials, err := s3store.ReadCredentialsFile(destination.MaintenanceCredentials.File)
 	if err != nil {
 		return nil, err
 	}
@@ -1014,9 +1140,9 @@ func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "  restore [OPTIONS] BACKUP-ID  verify and materialize into a new directory")
 	fmt.Fprintln(output, "  restore-mongodb [OPTIONS] BACKUP-ID  replay into a disposable local mongod")
 	fmt.Fprintln(output, "  restore-redis [OPTIONS] BACKUP-ID  load RDB into a disposable local redis-server")
-	fmt.Fprintln(output, "  prune TARGET        apply a target's retention policy")
+	fmt.Fprintln(output, "  prune [--spool-root ROOT] TARGET  apply retention to completed sets")
 	fmt.Fprintln(output, "  doctor TARGET       validate a target without capturing data")
 	fmt.Fprintln(output, "  version             print build information")
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "MariaDB, MongoDB, and Redis run, S3 delivery, restore, and doctor are implemented; other operations fail closed.")
+	fmt.Fprintln(output, "MariaDB, MongoDB, and Redis run, S3 delivery, retention, restore, and doctor are implemented; other operations fail closed.")
 }

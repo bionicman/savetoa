@@ -61,6 +61,74 @@ func TestCommitCreatesDurableVerifiableSet(t *testing.T) {
 	}
 }
 
+func TestListCompletedIgnoresIncompleteSetsAndDeleteRemovesValidSet(t *testing.T) {
+	store, rootPath := newTestStore(t)
+	set, err := store.Commit(context.Background(), "test", validManifest(), strings.NewReader("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	incomplete := filepath.Join(rootPath, "test", "example-mariadb", "2026", "09", "03", "20260903-incomplete")
+	if err := os.MkdirAll(incomplete, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(incomplete, manifestFilename), []byte("not complete"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sets, err := store.ListCompleted("test", "example-mariadb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sets) != 1 || sets[0].RelativePath != set.RelativePath {
+		t.Fatalf("completed sets = %#v", sets)
+	}
+	if err := store.DeleteCompleted(context.Background(), sets[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(rootPath, set.RelativePath)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted set still exists: %v", err)
+	}
+	if _, err := os.Stat(incomplete); err != nil {
+		t.Fatalf("incomplete set was touched: %v", err)
+	}
+}
+
+func TestListCompletedFailsClosedOnInvalidMarker(t *testing.T) {
+	store, rootPath := newTestStore(t)
+	set, err := store.Commit(context.Background(), "test", validManifest(), strings.NewReader("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootPath, set.RelativePath, completeFilename), []byte("invalid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ListCompleted("test", "example-mariadb"); err == nil {
+		t.Fatal("invalid completed set was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(rootPath, set.RelativePath, manifestFilename)); err != nil {
+		t.Fatalf("failed scan modified set: %v", err)
+	}
+}
+
+func TestDeleteCompletedInvalidatesMarkerBeforeCleanupFailure(t *testing.T) {
+	store, rootPath := newTestStore(t)
+	set, err := store.Commit(context.Background(), "test", validManifest(), strings.NewReader("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootPath, set.RelativePath, "unexpected"), []byte("preserve"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteCompleted(context.Background(), *set); err == nil {
+		t.Fatal("cleanup with an unexpected file succeeded")
+	}
+	if _, err := store.Load(set.RelativePath); err == nil {
+		t.Fatal("partially deleted set remained complete")
+	}
+	if data, err := os.ReadFile(filepath.Join(rootPath, set.RelativePath, "unexpected")); err != nil || string(data) != "preserve" {
+		t.Fatalf("unexpected file was modified: %q, %v", data, err)
+	}
+}
+
 func TestCommitNeverOverwritesExistingSet(t *testing.T) {
 	store, _ := newTestStore(t)
 	value := validManifest()

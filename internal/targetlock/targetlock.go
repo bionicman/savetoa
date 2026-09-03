@@ -71,7 +71,7 @@ func (manager *Manager) Acquire(ctx context.Context, target string) (*Lock, erro
 }
 
 func (manager *Manager) openLockFile(filename string) (*os.File, error) {
-	file, err := manager.root.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := manager.root.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o660)
 	if err == nil {
 		return file, nil
 	}

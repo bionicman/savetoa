@@ -42,6 +42,8 @@ targets:
         driver: s3
         credentials:
           file: /etc/savetoa/credentials.d/offsite-s3.yml
+        maintenance_credentials:
+          file: /etc/savetoa/maintenance-credentials.d/offsite-s3.yml
         endpoint: https://s3.example.invalid
         region: eu-west-1
         bucket: example-backups
@@ -266,6 +268,17 @@ func TestParseFailsClosed(t *testing.T) {
 				t.Fatalf("Parse() error = %q, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestRetentionRequiresSeparateS3MaintenanceCredentials(t *testing.T) {
+	missing := strings.Replace(validConfig, "        maintenance_credentials:\n          file: /etc/savetoa/maintenance-credentials.d/offsite-s3.yml\n", "", 1)
+	if _, err := Parse([]byte(missing)); err == nil || !strings.Contains(err.Error(), "maintenance_credentials.file is required") {
+		t.Fatalf("Parse(missing maintenance credentials) error = %v", err)
+	}
+	shared := strings.Replace(validConfig, "/etc/savetoa/maintenance-credentials.d/offsite-s3.yml", "/etc/savetoa/credentials.d/offsite-s3.yml", 1)
+	if _, err := Parse([]byte(shared)); err == nil || !strings.Contains(err.Error(), "must be separate") {
+		t.Fatalf("Parse(shared maintenance credentials) error = %v", err)
 	}
 }
 

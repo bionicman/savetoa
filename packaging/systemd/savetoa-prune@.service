@@ -6,13 +6,10 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=savetoa
+User=savetoa-maintenance
 Group=savetoa
 ExecStart=/usr/bin/savetoa --config /etc/savetoa/config.yml prune %i
-ConfigurationDirectory=savetoa
-StateDirectory=savetoa
-RuntimeDirectory=savetoa
-UMask=0077
+UMask=0007
 
 NoNewPrivileges=yes
 PrivateDevices=yes
@@ -24,4 +21,5 @@ ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectSystem=strict
 ReadOnlyPaths=/etc/savetoa
-ReadWritePaths=/var/backups/savetoa
+ReadWritePaths=/var/backups/savetoa /var/lib/savetoa/spool /run/savetoa
+InaccessiblePaths=/etc/savetoa/credentials.d /etc/savetoa/recipients.d

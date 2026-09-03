@@ -22,8 +22,10 @@ tool-version gates without capturing data. `restore` verifies a completed local 
 its tar, zstd, and age layers into a new explicit directory without activating
 a service. Failed S3 delivery can be retried from the durable spool by backup
 ID without capturing or encrypting again. `fetch` verifies a completed S3 set
-and atomically imports it into the durable spool for local restore. Retention
-still fails explicitly. `restore-mongodb`
+and atomically imports it into the durable spool for local restore. `prune`
+applies UTC daily, ISO-weekly, and monthly retention independently to the
+spool and every destination, using separate remote maintenance credentials.
+`restore-mongodb`
 replays into a temporary loopback-only `mongod` with a new dbpath and never
 accepts a service endpoint. `restore-redis` loads the RDB into a temporary
 loopback-only `redis-server` with persistence disabled.
@@ -82,8 +84,9 @@ lintian ../savetoa_*.changes
 
 The package installs the binary as `/usr/bin/savetoa`, reads configuration
 from `/etc/savetoa/config.yml`, and provides systemd template units. It creates
-an unprivileged `savetoa` system account and persistent state below
-`/var/lib/savetoa`.
+unprivileged `savetoa` and `savetoa-maintenance` system accounts and persistent
+state below `/var/lib/savetoa`. A successful backup unit triggers its matching
+prune unit; a target without retention configured is a successful no-op.
 
 Template units are deliberately not enabled by package installation. A
 configuration-management consumer supplies targets, credentials, permissions,

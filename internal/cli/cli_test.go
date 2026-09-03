@@ -13,6 +13,7 @@ import (
 
 	"github.com/bionicman/savetoa/internal/config"
 	"github.com/bionicman/savetoa/internal/localstore"
+	"github.com/bionicman/savetoa/internal/manifest"
 	"github.com/bionicman/savetoa/internal/mariadb"
 	"github.com/bionicman/savetoa/internal/mongodb"
 	redisdriver "github.com/bionicman/savetoa/internal/redis"
@@ -62,12 +63,97 @@ func TestPlannedCommandFailsClosed(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Run([]string{"prune", "production-mariadb"}, &stdout, &stderr)
+	code := Run([]string{"list"}, &stdout, &stderr)
 	if code == 0 {
 		t.Fatal("unimplemented backup command returned success")
 	}
 	if !strings.Contains(stderr.String(), "not implemented") {
 		t.Fatalf("unexpected error: %q", stderr.String())
+	}
+}
+
+func TestPruneAppliesRetentionToSpoolAndLocalDestination(t *testing.T) {
+	root := t.TempDir()
+	spoolRoot := makeDirectory(t, root, "spool")
+	destinationRoot := makeDirectory(t, root, "destination")
+	locksRoot := makeDirectory(t, root, "locks")
+	for _, storeRoot := range []string{spoolRoot, destinationRoot} {
+		commitRetentionSet(t, storeRoot, "20260901t120000z-old", time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC))
+		commitRetentionSet(t, storeRoot, "20260902t120000z-new", time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC))
+	}
+	configPath := filepath.Join(root, "config.yml")
+	configuration := `config_version: 1
+environment: test
+targets:
+  database:
+    driver: mariadb
+    credentials:
+      file: /etc/savetoa/credentials.d/database.cnf
+    source:
+      socket: /run/mysqld/mysqld.sock
+      replica:
+        required: true
+        source_host: primary.internal
+        source_port: 3306
+        source_user: replication
+        require_gtid: true
+        max_lag: 5m
+    capture:
+      prepare: true
+      safe_replica_backup: true
+      use_memory: 512M
+    destinations:
+      local:
+        driver: local
+        path: ` + destinationRoot + `
+    retention:
+      keep_daily: 1
+      keep_weekly: 0
+      keep_monthly: 0
+groups: {}
+`
+	if err := os.WriteFile(configPath, []byte(configuration), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousPaths := defaultRunPaths
+	defaultRunPaths = runPaths{work: previousPaths.work, spool: spoolRoot, locks: locksRoot}
+	t.Cleanup(func() { defaultRunPaths = previousPaths })
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--config", configPath, "prune", "database"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("prune code=%d stderr=%q", code, stderr.String())
+	}
+	if strings.Count(stdout.String(), "pruned=1") != 2 {
+		t.Fatalf("prune output = %q", stdout.String())
+	}
+	for _, storeRoot := range []string{spoolRoot, destinationRoot} {
+		store, err := localstore.New(storeRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sets, err := store.ListCompleted("test", "database")
+		_ = store.Close()
+		if err != nil || len(sets) != 1 || sets[0].Manifest.BackupID != "20260902t120000z-new" {
+			t.Fatalf("sets in %s = %#v, error=%v", storeRoot, sets, err)
+		}
+	}
+}
+
+func commitRetentionSet(t *testing.T, root, backupID string, started time.Time) {
+	t.Helper()
+	store, err := localstore.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	value := manifest.Manifest{
+		FormatVersion: manifest.FormatVersion, BackupID: backupID, Target: "database", CaptureDriver: "mariadb",
+		StartedAt: started, CompletedAt: started.Add(time.Minute),
+		Tool:     manifest.Tool{Name: "mariadb-backup", Version: "12.3.3"},
+		Source:   manifest.Source{ServerVersion: "12.3.3", Replication: map[string]string{"gtid": "0-1-2"}},
+		Artifact: manifest.Artifact{Filename: "payload.tar"}, Transformations: []manifest.Transformation{},
+	}
+	if _, err := store.Commit(context.Background(), "test", value, strings.NewReader("payload")); err != nil {
+		t.Fatal(err)
 	}
 }
 
