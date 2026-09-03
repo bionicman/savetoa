@@ -1,0 +1,25 @@
+[Unit]
+Description=Check SaveToA backup target %i
+Documentation=https://github.com/bionicman/savetoa
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=savetoa
+Group=savetoa
+EnvironmentFile=/etc/savetoa/status.d/%i
+ExecStart=/usr/bin/savetoa --config /etc/savetoa/config.yml status --format json --max-age ${SAVETOA_MAX_AGE} %i
+
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadOnlyPaths=/etc/savetoa /var/backups/savetoa /var/lib/savetoa/spool
+ReadWritePaths=-/var/lib/savetoa/hook-events
+InaccessiblePaths=/etc/savetoa/maintenance-credentials.d

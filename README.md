@@ -25,6 +25,11 @@ ID without capturing or encrypting again. `fetch` verifies a completed S3 set
 and atomically imports it into the durable spool for local restore. `prune`
 applies UTC daily, ISO-weekly, and monthly retention independently to the
 spool and every destination, using separate remote maintenance credentials.
+`list` inventories completed sets across the spool and configured destinations;
+`status` additionally returns a monitoring-friendly exit code for missing,
+incomplete, stale, or clock-skewed latest sets. Both support deterministic JSON.
+Optional root-managed lifecycle hooks receive non-secret JSON events after
+`run`, delivery, fetch, prune, status, and doctor outcomes.
 `restore-mongodb`
 replays into a temporary loopback-only `mongod` with a new dbpath and never
 accepts a service endpoint. `restore-redis` loads the RDB into a temporary
@@ -47,6 +52,8 @@ savetoa restore-redis --source-root /var/backups/savetoa \
   --target-dir /srv/redis-restore-check \
   --identity-file /run/restore.age <backup-id>
 savetoa prune production-mariadb
+savetoa list --format json production-mariadb
+savetoa status --format json --max-age 36h production-mariadb
 savetoa doctor production-mariadb
 ```
 
@@ -90,7 +97,9 @@ prune unit; a target without retention configured is a successful no-op.
 
 Template units are deliberately not enabled by package installation. A
 configuration-management consumer supplies targets, credentials, permissions,
-timer schedules, and narrowly scoped database filesystem access.
+timer schedules, alert routing, and narrowly scoped database filesystem access.
+The optional status timer reads a per-target freshness threshold from a
+non-secret environment file and leaves failed checks visible to systemd.
 
 ## Documentation
 
@@ -98,6 +107,8 @@ timer schedules, and narrowly scoped database filesystem access.
 - [Design rationale](docs/design-rationale.md)
 - [Configuration contract](docs/configuration.md)
 - [Manifest format v1](docs/manifest-v1.md)
+- [Status report v1](docs/status-v1.md)
+- [Lifecycle hooks v1](docs/hooks-v1.md)
 - [Security model](docs/security-model.md)
 - [Development roadmap](docs/roadmap.md)
 

@@ -12,6 +12,12 @@ Systemd owns scheduling, mutual exclusion at the unit level, resource limits,
 and failure supervision. Configuration management owns package installation,
 target definitions, credential files, schedules, host permissions, and alerts.
 
+Optional lifecycle hooks are a narrow event adapter, not embedded monitoring.
+SaveToA discovers root-managed executables under a fixed directory and invokes
+them directly with a non-secret versioned JSON event on stdin. Target YAML
+cannot select an executable, supply shell text, or template arguments. Hook
+failure never rewrites the already established action outcome.
+
 ## Domain model
 
 A **target** is a named backup job. It contains exactly one capture driver and

@@ -55,7 +55,23 @@ The spool root defaults to
 Run a configured group of targets.
 .TP
 .B list
-List completed backup sets.
+.RI [ --spool-root " root" ]
+.RI [ --format " text|json" ]
+.I target
+.br
+List completed sets across the durable spool and every configured destination,
+including repository presence, latest backup age, and completeness status.
+.TP
+.B status
+.RI [ --spool-root " root" ]
+.RI [ --format " text|json" ]
+.RI [ --max-age " duration" ]
+.I target
+.br
+Emit the same repository report as
+.BR list ,
+but exit nonzero when the latest set is absent from any repository, empty,
+newer than the local clock, or older than the optional positive age limit.
 .TP
 .BI verify " backup-id"
 Verify a completed backup set.
@@ -116,6 +132,10 @@ Client-side encryption recipients.
 .TP
 .I /etc/savetoa/maintenance-credentials.d/
 Protected S3 list/delete credentials, inaccessible to backup units.
+.TP
+.I /etc/savetoa/hooks.d/
+Optional root-owned lifecycle executables. SaveToA invokes matching action and
+outcome hooks directly with a non-secret JSON event on standard input.
 .TP
 .I /var/lib/savetoa/
 Persistent state, work directories, and delivery spool.

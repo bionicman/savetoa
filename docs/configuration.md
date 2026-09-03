@@ -52,6 +52,20 @@ invalid published path.
 The spool root defaults to `/var/lib/savetoa/spool`; an operator can select a
 different existing absolute root for an isolated recovery exercise.
 
+`list [--spool-root ROOT] [--format text|json] TARGET` reads completed sets
+from the spool and every configured destination. It reports which repositories
+contain each immutable backup ID and ignores incomplete sets. `status` accepts
+the same options plus an optional positive `--max-age DURATION`; it exits
+nonzero when no completed set exists, the latest set is missing from any
+repository, its completion time is in the future, or it exceeds the age limit.
+Repository scan errors and conflicting metadata for one backup ID fail closed.
+See `docs/status-v1.md` for the stable JSON shape.
+
+Target YAML does not configure executable hooks. An administrator may install
+optional root-owned lifecycle executables below `/etc/savetoa/hooks.d`; they
+receive the stable non-secret JSON contract documented in `docs/hooks-v1.md`.
+SaveToA never evaluates a hook through a shell.
+
 `restore` does not consult target configuration. It takes a completed local
 backup-store root, backup ID, and new absolute destination explicitly. An
 encrypted set additionally requires a mode-`0600` X25519 identity file.
@@ -205,3 +219,11 @@ creates and enables instances with the desired `OnCalendar` override. A
 successful `savetoa@TARGET.service` triggers `savetoa-prune@TARGET.service`.
 Prune has no independent timer and is a successful no-op when the target has no
 retention policy.
+
+The package also provides disabled `savetoa-status@.service` and
+`savetoa-status@.timer` templates. Configuration management must create
+`/etc/savetoa/status.d/TARGET` containing a non-secret
+`SAVETOA_MAX_AGE=DURATION` before it enables an instance. The hourly timer is a
+default polling cadence, not an alert transport; operators remain responsible
+for connecting failed units to their monitoring system. Package installation
+does not enable either backup or status schedules.

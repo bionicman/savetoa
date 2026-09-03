@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	archivepkg "github.com/bionicman/savetoa/internal/archive"
 	"github.com/bionicman/savetoa/internal/buildinfo"
 	"github.com/bionicman/savetoa/internal/config"
+	"github.com/bionicman/savetoa/internal/hook"
 	"github.com/bionicman/savetoa/internal/localstore"
 	"github.com/bionicman/savetoa/internal/manifest"
 	"github.com/bionicman/savetoa/internal/mariadb"
@@ -30,6 +32,7 @@ import (
 	"github.com/bionicman/savetoa/internal/restore"
 	"github.com/bionicman/savetoa/internal/s3store"
 	"github.com/bionicman/savetoa/internal/spool"
+	statuspkg "github.com/bionicman/savetoa/internal/status"
 	"github.com/bionicman/savetoa/internal/targetlock"
 )
 
@@ -39,6 +42,44 @@ var defaultRunPaths = runPaths{
 	work:  "/var/lib/savetoa/work",
 	spool: "/var/lib/savetoa/spool",
 	locks: "/run/savetoa",
+}
+
+var (
+	lifecycleHookRunner = hook.DefaultRunner()
+	lifecycleNow        = time.Now
+)
+
+type commandLifecycle struct {
+	action      string
+	environment string
+	target      string
+	backupID    string
+	repository  string
+	startedAt   time.Time
+}
+
+func beginLifecycle(action, environment, target string) *commandLifecycle {
+	return &commandLifecycle{action: action, environment: environment, target: target, startedAt: lifecycleNow()}
+}
+
+func (lifecycle *commandLifecycle) finish(exitCode int, stderr io.Writer) {
+	if lifecycle == nil {
+		return
+	}
+	finished := lifecycleNow()
+	outcome := "failure"
+	if exitCode == 0 {
+		outcome = "success"
+	}
+	event := hook.Event{
+		SchemaVersion: hook.SchemaVersion, Action: lifecycle.action, Outcome: outcome,
+		Environment: lifecycle.environment, Target: lifecycle.target, BackupID: lifecycle.backupID,
+		Repository: lifecycle.repository, StartedAt: lifecycle.startedAt.UTC(), FinishedAt: finished.UTC(),
+		DurationMS: finished.Sub(lifecycle.startedAt).Milliseconds(), ExitCode: exitCode,
+	}
+	if err := lifecycleHookRunner.Run(event); err != nil {
+		fmt.Fprintf(stderr, "savetoa: hook action=%s outcome=%s failed: %v\n", lifecycle.action, outcome, err)
+	}
 }
 
 type runPaths struct {
@@ -70,6 +111,7 @@ var plannedCommands = []string{
 	"restore-redis",
 	"run",
 	"run-group",
+	"status",
 	"verify",
 }
 
@@ -133,6 +175,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if command == "prune" {
 		return runPrune(*configPath, remaining[1:], stdout, stderr)
 	}
+	if command == "list" {
+		return runList(*configPath, remaining[1:], stdout, stderr)
+	}
+	if command == "status" {
+		return runStatus(*configPath, remaining[1:], stdout, stderr)
+	}
 
 	fmt.Fprintf(
 		stderr,
@@ -143,7 +191,190 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
-func runPrune(configPath string, args []string, stdout, stderr io.Writer) int {
+type statusRepository struct {
+	name   string
+	driver string
+	local  *localstore.Store
+	s3     *s3store.Store
+}
+
+func (repository *statusRepository) Name() string   { return repository.name }
+func (repository *statusRepository) Driver() string { return repository.driver }
+func (repository *statusRepository) ListCompleted(ctx context.Context, environment, target string) ([]localstore.Set, error) {
+	if repository.local != nil {
+		return repository.local.ListCompleted(environment, target)
+	}
+	if repository.s3 != nil {
+		return repository.s3.ListCompleted(ctx, environment, target)
+	}
+	return nil, errors.New("status repository is not open")
+}
+
+func runList(configPath string, args []string, stdout, stderr io.Writer) int {
+	return runRepositoryReport(configPath, "list", args, false, stdout, stderr)
+}
+
+func runStatus(configPath string, args []string, stdout, stderr io.Writer) int {
+	return runRepositoryReport(configPath, "status", args, true, stdout, stderr)
+}
+
+func runRepositoryReport(configPath, command string, args []string, enforce bool, stdout, stderr io.Writer) (code int) {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	spoolRoot := flags.String("spool-root", defaultRunPaths.spool, "absolute path to the durable spool")
+	format := flags.String("format", "text", "output format: text or json")
+	var maxAge string
+	if enforce {
+		flags.StringVar(&maxAge, "max-age", "", "maximum acceptable age of the latest completed backup")
+	}
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintf(stderr, "savetoa: %s requires [--spool-root ROOT] [--format text|json] TARGET\n", command)
+		return 2
+	}
+	if *format != "text" && *format != "json" {
+		fmt.Fprintln(stderr, "savetoa: format must be text or json")
+		return 2
+	}
+	var maximumAge time.Duration
+	if maxAge != "" {
+		var err error
+		maximumAge, err = time.ParseDuration(maxAge)
+		if err != nil || maximumAge <= 0 {
+			fmt.Fprintln(stderr, "savetoa: max-age must be a positive duration")
+			return 2
+		}
+	}
+	configuration, err := readConfig(configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: %v\n", err)
+		return 1
+	}
+	targetName := flags.Arg(0)
+	target, ok := configuration.Targets[targetName]
+	if !ok {
+		fmt.Fprintf(stderr, "savetoa: target %q is not configured\n", targetName)
+		return 1
+	}
+	var lifecycle *commandLifecycle
+	if enforce {
+		lifecycle = beginLifecycle("status", configuration.Environment, targetName)
+		defer func() { lifecycle.finish(code, stderr) }()
+	}
+	repositories, closeRepositories, err := openStatusRepositories(*spoolRoot, target)
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: open status repositories: %v\n", err)
+		return 1
+	}
+	defer closeRepositories()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	report, err := statuspkg.Inspect(ctx, configuration.Environment, targetName, repositories, time.Now().UTC())
+	if err != nil {
+		fmt.Fprintf(stderr, "savetoa: %s %q failed: %v\n", command, targetName, err)
+		return 1
+	}
+	if lifecycle != nil {
+		lifecycle.backupID = report.LatestBackupID
+	}
+	if report.AgeSeconds != nil && *report.AgeSeconds < 0 {
+		report.Status = "clock-skew"
+	} else if maximumAge > 0 && report.AgeSeconds != nil && *report.AgeSeconds > int64(maximumAge/time.Second) {
+		report.Status = "stale"
+	}
+	if *format == "json" {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			fmt.Fprintln(stderr, "savetoa: encode status report")
+			return 1
+		}
+	} else {
+		writeStatusText(stdout, report)
+	}
+	if enforce && report.Status != "complete" {
+		return 1
+	}
+	return 0
+}
+
+func openStatusRepositories(spoolRoot string, target config.Target) ([]statuspkg.Repository, func(), error) {
+	repositories := make([]statuspkg.Repository, 0, len(target.Destinations)+1)
+	localStores := make([]*localstore.Store, 0, len(target.Destinations)+1)
+	closeRepositories := func() {
+		for _, store := range localStores {
+			_ = store.Close()
+		}
+	}
+	identities := make(map[string]string, len(target.Destinations)+1)
+	openLocal := func(name, root string) error {
+		identity := "local:" + root
+		if existing, duplicate := identities[identity]; duplicate {
+			return fmt.Errorf("repositories %q and %q use the same local root", existing, name)
+		}
+		store, err := localstore.New(root)
+		if err != nil {
+			return fmt.Errorf("open repository %q: %w", name, err)
+		}
+		identities[identity] = name
+		localStores = append(localStores, store)
+		repositories = append(repositories, &statusRepository{name: name, driver: "local", local: store})
+		return nil
+	}
+	if err := openLocal("spool", spoolRoot); err != nil {
+		return nil, closeRepositories, err
+	}
+	destinationNames := make([]string, 0, len(target.Destinations))
+	for name := range target.Destinations {
+		destinationNames = append(destinationNames, name)
+	}
+	slices.Sort(destinationNames)
+	for _, name := range destinationNames {
+		destination := target.Destinations[name]
+		switch destination.Driver {
+		case "local":
+			if err := openLocal(name, destination.Path); err != nil {
+				closeRepositories()
+				return nil, func() {}, err
+			}
+		case "s3":
+			identity := strings.Join([]string{"s3", destination.Endpoint, destination.Region, destination.Bucket, destination.Prefix}, "\x00")
+			if existing, duplicate := identities[identity]; duplicate {
+				closeRepositories()
+				return nil, func() {}, fmt.Errorf("repositories %q and %q use the same S3 prefix", existing, name)
+			}
+			store, err := openS3Destination(destination)
+			if err != nil {
+				closeRepositories()
+				return nil, func() {}, fmt.Errorf("open repository %q: %w", name, err)
+			}
+			identities[identity] = name
+			repositories = append(repositories, &statusRepository{name: name, driver: "s3", s3: store})
+		default:
+			closeRepositories()
+			return nil, func() {}, fmt.Errorf("repository %q uses unsupported driver %q", name, destination.Driver)
+		}
+	}
+	return repositories, closeRepositories, nil
+}
+
+func writeStatusText(output io.Writer, report *statuspkg.Report) {
+	age := "none"
+	if report.AgeSeconds != nil {
+		age = strconv.FormatInt(*report.AgeSeconds, 10) + "s"
+	}
+	fmt.Fprintf(output, "target=%s status=%s latest=%s age=%s repositories=%d backups=%d\n",
+		report.Target, report.Status, report.LatestBackupID, age, len(report.Repositories), len(report.Backups))
+	for _, backup := range report.Backups {
+		fmt.Fprintf(output, "target=%s backup_id=%s completed=%s size=%d repositories=%s path=%s\n",
+			report.Target, backup.BackupID, backup.CompletedAt.UTC().Format(time.RFC3339Nano), backup.SizeBytes,
+			strings.Join(backup.Repositories, ","), backup.RelativePath)
+	}
+}
+
+func runPrune(configPath string, args []string, stdout, stderr io.Writer) (code int) {
 	flags := flag.NewFlagSet("prune", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	spoolRoot := flags.String("spool-root", defaultRunPaths.spool, "absolute path to the durable spool")
@@ -165,6 +396,8 @@ func runPrune(configPath string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "savetoa: target %q is not configured\n", targetName)
 		return 1
 	}
+	lifecycle := beginLifecycle("prune", configuration.Environment, targetName)
+	defer func() { lifecycle.finish(code, stderr) }()
 	if target.Retention == nil {
 		fmt.Fprintf(stdout, "target=%s status=skipped reason=no-retention-policy\n", targetName)
 		return 0
@@ -305,7 +538,7 @@ func runMongoDBRestore(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func runFetch(configPath string, args []string, stdout, stderr io.Writer) int {
+func runFetch(configPath string, args []string, stdout, stderr io.Writer) (code int) {
 	flags := flag.NewFlagSet("fetch", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	spoolRoot := flags.String("spool-root", defaultRunPaths.spool, "absolute path to the destination spool")
@@ -327,6 +560,10 @@ func runFetch(configPath string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "savetoa: target %q is not configured\n", targetName)
 		return 1
 	}
+	lifecycle := beginLifecycle("fetch", configuration.Environment, targetName)
+	lifecycle.backupID = backupID
+	lifecycle.repository = sourceName
+	defer func() { lifecycle.finish(code, stderr) }()
 	sourceConfig, ok := target.Destinations[sourceName]
 	if !ok {
 		fmt.Fprintf(stderr, "savetoa: destination %q is not configured for target %q\n", sourceName, targetName)
@@ -391,7 +628,7 @@ func backupSetRelativePath(environment, target, backupID string) (string, error)
 	return relativePath, nil
 }
 
-func runDeliver(configPath string, args []string, stdout, stderr io.Writer) int {
+func runDeliver(configPath string, args []string, stdout, stderr io.Writer) (code int) {
 	if len(args) != 3 {
 		fmt.Fprintln(stderr, "savetoa: deliver requires TARGET DESTINATION BACKUP-ID")
 		return 2
@@ -407,6 +644,10 @@ func runDeliver(configPath string, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "savetoa: target %q is not configured\n", targetName)
 		return 1
 	}
+	lifecycle := beginLifecycle("deliver", configuration.Environment, targetName)
+	lifecycle.backupID = backupID
+	lifecycle.repository = destinationName
+	defer func() { lifecycle.finish(code, stderr) }()
 	destinationConfig, ok := target.Destinations[destinationName]
 	if !ok {
 		fmt.Fprintf(stderr, "savetoa: destination %q is not configured for target %q\n", destinationName, targetName)
@@ -514,7 +755,7 @@ func runRestore(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func runBackup(configPath string, args []string, stdout, stderr io.Writer) int {
+func runBackup(configPath string, args []string, stdout, stderr io.Writer) (code int) {
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "savetoa: run requires exactly one TARGET")
 		return 2
@@ -530,6 +771,8 @@ func runBackup(configPath string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "savetoa: target %q is not configured\n", targetName)
 		return 1
 	}
+	lifecycle := beginLifecycle("run", configuration.Environment, targetName)
+	defer func() { lifecycle.finish(code, stderr) }()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var set *localstore.Set
@@ -548,6 +791,7 @@ func runBackup(configPath string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "savetoa: run %q failed: %v\n", targetName, err)
 		return 1
 	}
+	lifecycle.backupID = set.Manifest.BackupID
 	fmt.Fprintf(stdout, "target=%s driver=%s status=complete backup_id=%s path=%s\n",
 		targetName, target.Driver, set.Manifest.BackupID, set.RelativePath)
 	return 0
@@ -1065,7 +1309,7 @@ func readConfig(configPath string) (*config.Config, error) {
 	return configuration, nil
 }
 
-func runDoctor(configPath string, args []string, stdout, stderr io.Writer) int {
+func runDoctor(configPath string, args []string, stdout, stderr io.Writer) (code int) {
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "savetoa: doctor requires exactly one TARGET")
 		return 2
@@ -1081,6 +1325,8 @@ func runDoctor(configPath string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "savetoa: target %q is not configured\n", targetName)
 		return 1
 	}
+	lifecycle := beginLifecycle("doctor", configuration.Environment, targetName)
+	defer func() { lifecycle.finish(code, stderr) }()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	switch target.Driver {
@@ -1135,7 +1381,8 @@ func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "  deliver TARGET DESTINATION BACKUP-ID  retry S3 delivery from the spool")
 	fmt.Fprintln(output, "  fetch [--spool-root ROOT] TARGET S3-SOURCE BACKUP-ID  import an S3 set")
 	fmt.Fprintln(output, "  run-group GROUP     run a configured group of targets")
-	fmt.Fprintln(output, "  list                list completed backup sets")
+	fmt.Fprintln(output, "  list [OPTIONS] TARGET  list completed sets and repository presence")
+	fmt.Fprintln(output, "  status [OPTIONS] TARGET  check latest-set completeness and freshness")
 	fmt.Fprintln(output, "  verify BACKUP-ID    verify a completed backup set")
 	fmt.Fprintln(output, "  restore [OPTIONS] BACKUP-ID  verify and materialize into a new directory")
 	fmt.Fprintln(output, "  restore-mongodb [OPTIONS] BACKUP-ID  replay into a disposable local mongod")

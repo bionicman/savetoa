@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,12 +13,14 @@ import (
 	"time"
 
 	"github.com/bionicman/savetoa/internal/config"
+	"github.com/bionicman/savetoa/internal/hook"
 	"github.com/bionicman/savetoa/internal/localstore"
 	"github.com/bionicman/savetoa/internal/manifest"
 	"github.com/bionicman/savetoa/internal/mariadb"
 	"github.com/bionicman/savetoa/internal/mongodb"
 	redisdriver "github.com/bionicman/savetoa/internal/redis"
 	"github.com/bionicman/savetoa/internal/restore"
+	statuspkg "github.com/bionicman/savetoa/internal/status"
 )
 
 func TestHelpIsSuccessful(t *testing.T) {
@@ -63,13 +66,204 @@ func TestPlannedCommandFailsClosed(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := Run([]string{"list"}, &stdout, &stderr)
+	code := Run([]string{"run-group"}, &stdout, &stderr)
 	if code == 0 {
 		t.Fatal("unimplemented backup command returned success")
 	}
 	if !strings.Contains(stderr.String(), "not implemented") {
 		t.Fatalf("unexpected error: %q", stderr.String())
 	}
+}
+
+func TestListReportsCompletedSetsAcrossRepositoriesAsJSON(t *testing.T) {
+	root := t.TempDir()
+	spoolRoot := makeDirectory(t, root, "spool")
+	destinationRoot := makeDirectory(t, root, "destination")
+	locksRoot := makeDirectory(t, root, "locks")
+	completed := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	for _, storeRoot := range []string{spoolRoot, destinationRoot} {
+		commitRetentionSet(t, storeRoot, "20260903t120000z-listed", completed)
+	}
+	configPath := writeRepositoryStatusConfig(t, root, destinationRoot)
+	previousPaths := defaultRunPaths
+	defaultRunPaths = runPaths{work: previousPaths.work, spool: spoolRoot, locks: locksRoot}
+	t.Cleanup(func() { defaultRunPaths = previousPaths })
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--config", configPath, "list", "--format", "json", "database"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("list code=%d stderr=%q", code, stderr.String())
+	}
+	var report statuspkg.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("decode list JSON: %v\n%s", err, stdout.String())
+	}
+	if report.SchemaVersion != 1 || report.Status != "complete" || report.LatestBackupID != "20260903t120000z-listed" {
+		t.Fatalf("report = %#v", report)
+	}
+	if len(report.Repositories) != 2 || len(report.Backups) != 1 || len(report.Backups[0].Repositories) != 2 {
+		t.Fatalf("repository report = %#v", report)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"--config", configPath, "status", "--max-age", "24h", "database"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("complete status code=%d stderr=%q output=%q", code, stderr.String(), stdout.String())
+	}
+}
+
+func TestStatusFailsForStaleAndEmptyRepositories(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		commitSets bool
+		wantStatus string
+	}{
+		{name: "stale", commitSets: true, wantStatus: "stale"},
+		{name: "empty", wantStatus: "empty"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			spoolRoot := makeDirectory(t, root, "spool")
+			destinationRoot := makeDirectory(t, root, "destination")
+			locksRoot := makeDirectory(t, root, "locks")
+			if test.commitSets {
+				completed := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+				for _, storeRoot := range []string{spoolRoot, destinationRoot} {
+					commitRetentionSet(t, storeRoot, "20260901t120000z-stale", completed)
+				}
+			}
+			configPath := writeRepositoryStatusConfig(t, root, destinationRoot)
+			previousPaths := defaultRunPaths
+			defaultRunPaths = runPaths{work: previousPaths.work, spool: spoolRoot, locks: locksRoot}
+			t.Cleanup(func() { defaultRunPaths = previousPaths })
+
+			var stdout, stderr bytes.Buffer
+			code := Run([]string{"--config", configPath, "status", "--format", "json", "--max-age", "24h", "database"}, &stdout, &stderr)
+			if code != 1 || stderr.Len() != 0 {
+				t.Fatalf("status code=%d stderr=%q", code, stderr.String())
+			}
+			var report statuspkg.Report
+			if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+				t.Fatal(err)
+			}
+			if report.Status != test.wantStatus {
+				t.Fatalf("status = %q, want %q", report.Status, test.wantStatus)
+			}
+		})
+	}
+}
+
+func TestStatusEmitsFailureHookEvent(t *testing.T) {
+	root := t.TempDir()
+	spoolRoot := makeDirectory(t, root, "spool")
+	destinationRoot := makeDirectory(t, root, "destination")
+	locksRoot := makeDirectory(t, root, "locks")
+	configPath := writeRepositoryStatusConfig(t, root, destinationRoot)
+	hookRoot := makeDirectory(t, root, "hooks")
+	hookDirectory := filepath.Join(hookRoot, "status", "failure.d")
+	if err := os.MkdirAll(hookDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	eventPath := filepath.Join(root, "event.json")
+	script := "#!/bin/sh\n/bin/cat > '" + strings.ReplaceAll(eventPath, "'", "'\\''") + "'\n"
+	if err := os.WriteFile(filepath.Join(hookDirectory, "capture"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previousPaths := defaultRunPaths
+	previousRunner := lifecycleHookRunner
+	defaultRunPaths = runPaths{work: previousPaths.work, spool: spoolRoot, locks: locksRoot}
+	lifecycleHookRunner = hook.Runner{Root: hookRoot, Timeout: 30 * time.Second, RequiredUID: uint32(os.Getuid())}
+	t.Cleanup(func() {
+		defaultRunPaths = previousPaths
+		lifecycleHookRunner = previousRunner
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--config", configPath, "status", "--format", "json", "database"}, &stdout, &stderr)
+	if code != 1 || stderr.Len() != 0 {
+		t.Fatalf("status code=%d stderr=%q", code, stderr.String())
+	}
+	data, err := os.ReadFile(eventPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event hook.Event
+	if err := json.Unmarshal(data, &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Action != "status" || event.Outcome != "failure" || event.ExitCode != 1 || event.Environment != "test" || event.Target != "database" {
+		t.Fatalf("event = %#v", event)
+	}
+}
+
+func TestHookFailureDoesNotChangeSuccessfulStatus(t *testing.T) {
+	root := t.TempDir()
+	spoolRoot := makeDirectory(t, root, "spool")
+	destinationRoot := makeDirectory(t, root, "destination")
+	locksRoot := makeDirectory(t, root, "locks")
+	completed := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	for _, storeRoot := range []string{spoolRoot, destinationRoot} {
+		commitRetentionSet(t, storeRoot, "20260903t120000z-hooked", completed)
+	}
+	configPath := writeRepositoryStatusConfig(t, root, destinationRoot)
+	hookRoot := makeDirectory(t, root, "hooks")
+	hookDirectory := filepath.Join(hookRoot, "status", "success.d")
+	if err := os.MkdirAll(hookDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hookDirectory, "broken"), []byte("#!/bin/sh\necho private-webhook-response >&2\nexit 9\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previousPaths := defaultRunPaths
+	previousRunner := lifecycleHookRunner
+	defaultRunPaths = runPaths{work: previousPaths.work, spool: spoolRoot, locks: locksRoot}
+	lifecycleHookRunner = hook.Runner{Root: hookRoot, Timeout: 30 * time.Second, RequiredUID: uint32(os.Getuid())}
+	t.Cleanup(func() {
+		defaultRunPaths = previousPaths
+		lifecycleHookRunner = previousRunner
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--config", configPath, "status", "database"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("status code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "hook action=status outcome=success failed") || strings.Contains(stderr.String(), "private-webhook-response") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func writeRepositoryStatusConfig(t *testing.T, root, destinationRoot string) string {
+	t.Helper()
+	configPath := filepath.Join(root, "config.yml")
+	configuration := `config_version: 1
+environment: test
+targets:
+  database:
+    driver: mariadb
+    credentials:
+      file: /etc/savetoa/credentials.d/database.cnf
+    source:
+      socket: /run/mysqld/mysqld.sock
+      replica:
+        required: true
+        source_host: primary.internal
+        source_port: 3306
+        source_user: replication
+        require_gtid: true
+        max_lag: 5m
+    capture:
+      prepare: true
+      safe_replica_backup: true
+      use_memory: 512M
+    destinations:
+      local:
+        driver: local
+        path: ` + destinationRoot + `
+groups: {}
+`
+	if err := os.WriteFile(configPath, []byte(configuration), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return configPath
 }
 
 func TestPruneAppliesRetentionToSpoolAndLocalDestination(t *testing.T) {

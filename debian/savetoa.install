@@ -4,3 +4,5 @@ packaging/config.example.yml usr/share/doc/savetoa/examples/
 packaging/systemd/savetoa@.service usr/lib/systemd/system/
 packaging/systemd/savetoa@.timer usr/lib/systemd/system/
 packaging/systemd/savetoa-prune@.service usr/lib/systemd/system/
+packaging/systemd/savetoa-status@.service usr/lib/systemd/system/
+packaging/systemd/savetoa-status@.timer usr/lib/systemd/system/

@@ -30,6 +30,12 @@ Semantic Versioning after its first stable release.
   common pipeline, and load verification in a disposable local redis-server.
 - Fail-closed GFS retention across the spool, local destinations, and S3, with
   marker-first deletion and separate maintenance credentials and execution identity.
+- Deterministic text and JSON repository inventory with monitoring exit codes
+  for empty, degraded, stale, and clock-skewed latest backup sets.
+- Disabled hardened systemd status templates with operator-owned per-target
+  freshness thresholds.
+- Optional bounded root-managed lifecycle hooks with versioned non-secret JSON
+  events and best-effort outcome semantics.
 - Debian packaging, systemd templates, sysusers, and tmpfiles manifests.
 - Architecture, design rationale, security, configuration, and roadmap docs.
 

@@ -13,9 +13,11 @@ Development should proceed through short restore-tested increments.
 7. [x] Implement MongoDB full archive plus oplog capture and disposable restore replay.
 8. [x] Implement Redis BGSAVE capture and RDB restore verification.
 9. [x] Implement retention with a distinct maintenance permission boundary.
-10. [ ] Add structured status output and monitoring integration.
-11. [ ] Add files/ACME capture.
-12. [ ] Design Garage metadata backup and S3-to-S3 migration as separate drivers.
+10. [x] Add deterministic structured repository status output.
+11. [ ] Connect status freshness and completeness checks to monitoring alerts.
+12. [x] Add optional root-managed lifecycle event hooks for external telemetry.
+13. [ ] Add files/ACME capture.
+14. [ ] Design Garage metadata backup and S3-to-S3 migration as separate drivers.
 
 Full/incremental optimization follows measured data growth. Correct,
 restore-tested full backups are preferable to an early complex incremental

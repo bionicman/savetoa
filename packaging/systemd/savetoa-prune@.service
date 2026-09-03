@@ -21,5 +21,5 @@ ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectSystem=strict
 ReadOnlyPaths=/etc/savetoa
-ReadWritePaths=/var/backups/savetoa /var/lib/savetoa/spool /run/savetoa
+ReadWritePaths=/var/backups/savetoa /var/lib/savetoa/spool /run/savetoa -/var/lib/savetoa/hook-events
 InaccessiblePaths=/etc/savetoa/credentials.d /etc/savetoa/recipients.d

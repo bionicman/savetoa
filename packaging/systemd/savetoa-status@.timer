@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule SaveToA status check for target %i
+Documentation=https://github.com/bionicman/savetoa
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5m
+Persistent=true
+Unit=savetoa-status@%i.service
+
+[Install]
+WantedBy=timers.target
