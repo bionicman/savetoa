@@ -123,6 +123,26 @@ targets:
 groups: {}
 `
 
+const validTarConfig = `
+config_version: 1
+environment: example
+targets:
+  example-acme:
+    driver: tar
+    source:
+      paths:
+        - /etc/letsencrypt
+        - /var/lib/acme.sh
+    compression:
+      driver: zstd
+      level: 3
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+groups: {}
+`
+
 func TestParseValidConfiguration(t *testing.T) {
 	parsed, err := Parse([]byte(validConfig))
 	if err != nil {
@@ -188,6 +208,35 @@ func TestRedisConfigurationFailsClosed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse([]byte(input)); err == nil {
 				t.Fatal("Parse(unsafe Redis) succeeded")
+			}
+		})
+	}
+}
+
+func TestParseValidTarConfiguration(t *testing.T) {
+	parsed, err := Parse([]byte(validTarConfig))
+	if err != nil {
+		t.Fatalf("Parse(valid tar) error = %v", err)
+	}
+	target := parsed.Targets["example-acme"]
+	if target.Driver != "tar" || len(target.Source.Paths) != 2 {
+		t.Fatalf("tar target = %#v", target)
+	}
+}
+
+func TestTarConfigurationFailsClosed(t *testing.T) {
+	tests := map[string]string{
+		"missing paths": strings.Replace(validTarConfig, "      paths:\n        - /etc/letsencrypt\n        - /var/lib/acme.sh\n", "", 1),
+		"root path":     strings.Replace(validTarConfig, "/etc/letsencrypt", "/", 1),
+		"relative path": strings.Replace(validTarConfig, "/etc/letsencrypt", "etc/letsencrypt", 1),
+		"overlap":       strings.Replace(validTarConfig, "/var/lib/acme.sh", "/etc/letsencrypt/live", 1),
+		"credentials":   strings.Replace(validTarConfig, "    source:\n", "    credentials:\n      file: /etc/savetoa/credentials.d/forbidden\n    source:\n", 1),
+		"capture args":  strings.Replace(validTarConfig, "    compression:\n", "    capture:\n      full: true\n    compression:\n", 1),
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(input)); err == nil {
+				t.Fatal("Parse(unsafe tar) succeeded")
 			}
 		})
 	}

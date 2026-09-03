@@ -1,3 +1,9 @@
+savetoa (0.1.0-17) unstable; urgency=medium
+
+  * Add safe GNU tar capture for explicit filesystem paths.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Thu, 03 Sep 2026 18:26:59 +0000
+
 savetoa (0.1.0-16) unstable; urgency=medium
 
   * Permit hooks to write only their optional state directory from hardened

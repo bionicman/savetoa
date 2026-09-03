@@ -17,6 +17,8 @@ age encryption, durable staging, and delivery to every configured local or S3 de
 perform equivalent hidden/non-voting SECONDARY gates and capture a full
 `mongodump --archive --oplog`. Redis targets require a read-only,
 priority-zero replica and package a newly completed `BGSAVE SCHEDULE` RDB.
+Tar targets archive explicit filesystem paths with fixed GNU tar arguments;
+compression and encryption remain common transforms rather than tar options.
 `doctor` performs the corresponding topology, lag, persistence, and
 tool-version gates without capturing data. `restore` verifies a completed local set and safely materializes
 its tar, zstd, and age layers into a new explicit directory without activating
@@ -55,6 +57,7 @@ savetoa prune production-mariadb
 savetoa list --format json production-mariadb
 savetoa status --format json --max-age 36h production-mariadb
 savetoa doctor production-mariadb
+savetoa run production-files
 ```
 
 `production-mariadb` is a target, not a backup type. Its configuration chooses

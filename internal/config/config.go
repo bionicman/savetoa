@@ -11,6 +11,7 @@ import (
 	objectpath "path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -52,6 +53,7 @@ type FileReference struct {
 }
 
 type MariaDBSource struct {
+	Paths                  []string           `yaml:"paths,omitempty"`
 	Socket                 string             `yaml:"socket,omitempty"`
 	Host                   string             `yaml:"host,omitempty"`
 	Port                   int                `yaml:"port,omitempty"`
@@ -210,6 +212,10 @@ func (target Target) validate() error {
 		if err := target.validateRedis(); err != nil {
 			return err
 		}
+	case "tar":
+		if err := target.validateTar(); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unsupported capture driver %q", target.Driver)
 	}
@@ -220,7 +226,7 @@ func (target Target) validateMariaDB() error {
 	if err := target.Credentials.validate("credentials.file"); err != nil {
 		return err
 	}
-	if target.Source.Host != "" || target.Source.Port != 0 || target.Source.Username != "" || target.Source.AuthenticationDatabase != "" || target.Source.RDBFile != "" ||
+	if len(target.Source.Paths) != 0 || target.Source.Host != "" || target.Source.Port != 0 || target.Source.Username != "" || target.Source.AuthenticationDatabase != "" || target.Source.RDBFile != "" ||
 		target.Source.Replica.SetName != "" || target.Source.Replica.RequireSecondary || target.Source.Replica.RequireHidden ||
 		target.Source.Replica.RequireNonVoting || target.Source.Replica.RequirePriorityZero || target.Source.Replica.RequireReadOnly ||
 		target.Capture.Full || target.Capture.Oplog || target.Capture.BGSAVE || target.Capture.Schedule || target.Capture.MaxWait != "" {
@@ -264,7 +270,7 @@ func (target Target) validateMongoDB() error {
 	if err := target.Credentials.validate("credentials.file"); err != nil {
 		return err
 	}
-	if target.Source.Socket != "" || target.Source.Replica.SourceHost != "" || target.Source.Replica.SourcePort != 0 ||
+	if len(target.Source.Paths) != 0 || target.Source.Socket != "" || target.Source.Replica.SourceHost != "" || target.Source.Replica.SourcePort != 0 ||
 		target.Source.Replica.SourceUser != "" || target.Source.Replica.RequireGTID || target.Source.Replica.RequireReadOnly ||
 		target.Source.RDBFile != "" || target.Capture.Prepare || target.Capture.SafeReplicaBackup || target.Capture.UseMemory != "" ||
 		target.Capture.BGSAVE || target.Capture.Schedule || target.Capture.MaxWait != "" {
@@ -303,7 +309,7 @@ func (target Target) validateRedis() error {
 	if err := target.Credentials.validate("credentials.file"); err != nil {
 		return err
 	}
-	if target.Source.Socket != "" || target.Source.AuthenticationDatabase != "" ||
+	if len(target.Source.Paths) != 0 || target.Source.Socket != "" || target.Source.AuthenticationDatabase != "" ||
 		target.Source.Replica.SourceUser != "" || target.Source.Replica.RequireGTID ||
 		target.Source.Replica.SetName != "" || target.Source.Replica.RequireSecondary ||
 		target.Source.Replica.RequireHidden || target.Source.Replica.RequireNonVoting ||
@@ -343,6 +349,36 @@ func (target Target) validateRedis() error {
 	}
 	if !target.Capture.BGSAVE || !target.Capture.Schedule {
 		return errors.New("redis capture.bgsave and capture.schedule must both be true")
+	}
+	return nil
+}
+
+func (target Target) validateTar() error {
+	if target.Credentials.File != "" {
+		return errors.New("tar target must not contain credentials")
+	}
+	if target.Source.Socket != "" || target.Source.Host != "" || target.Source.Port != 0 ||
+		target.Source.Username != "" || target.Source.AuthenticationDatabase != "" || target.Source.RDBFile != "" ||
+		target.Source.Replica != (MariaDBReplicaGate{}) {
+		return errors.New("tar target contains fields for another driver")
+	}
+	if target.Capture != (MariaDBCapture{}) {
+		return errors.New("tar target contains capture options")
+	}
+	if len(target.Source.Paths) == 0 || len(target.Source.Paths) > 128 {
+		return errors.New("source.paths must contain 1 to 128 paths for tar")
+	}
+	paths := append([]string(nil), target.Source.Paths...)
+	for index, sourcePath := range paths {
+		if err := validateAbsolutePath(fmt.Sprintf("source.paths[%d]", index), sourcePath, true); err != nil {
+			return err
+		}
+	}
+	sort.Strings(paths)
+	for index := 1; index < len(paths); index++ {
+		if paths[index] == paths[index-1] || strings.HasPrefix(paths[index], paths[index-1]+string(filepath.Separator)) {
+			return errors.New("source.paths must not contain duplicate or overlapping paths")
+		}
 	}
 	return nil
 }

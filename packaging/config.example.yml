@@ -148,9 +148,33 @@ targets:
         bucket: example-backups
         prefix: databases
 
+  example-files:
+    driver: tar
+
+    source:
+      paths:
+        - /etc/example-state
+        - /var/lib/example-state
+
+    compression:
+      driver: zstd
+      level: 3
+
+    encryption:
+      driver: age
+      recipients_file: /etc/savetoa/recipients.d/example.age
+
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+
 groups:
   example-databases:
     targets:
       - example-mariadb
       - example-mongodb
       - example-redis
+  example-filesystems:
+    targets:
+      - example-files

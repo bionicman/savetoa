@@ -14,10 +14,11 @@ SaveToA coordinates named backup targets. A target selects a capture driver,
 source settings and credentials, transformations, destinations, and retention
 policy.
 .PP
-This release implements physical MariaDB, full+oplog MongoDB, and fresh-RDB Redis capture, verified local storage,
-idempotent S3 delivery and recovery, target-scoped retention, and
-safe materialization of completed local backup sets. Standalone listing and
-verification commands fail explicitly until implemented.
+This release implements physical MariaDB, full+oplog MongoDB, fresh-RDB Redis,
+and explicit-path GNU tar capture, verified local storage,
+idempotent S3 delivery and recovery, repository status reporting,
+target-scoped retention, and safe materialization of completed local backup
+sets. Standalone verification fails explicitly until implemented.
 .SH OPTIONS
 .TP
 .BI \-\-config " path"
@@ -31,7 +32,7 @@ Print version information and exit.
 .SH COMMANDS
 .TP
 .BI run " target"
-Capture and deliver one configured MariaDB, MongoDB, or Redis target to its local and S3 destinations.
+Capture and deliver one configured MariaDB, MongoDB, Redis, or tar target to its local and S3 destinations.
 The command performs driver-specific replica health checks and capture,
 optional zstd and age transforms, durable staging, and destination verification.
 .TP

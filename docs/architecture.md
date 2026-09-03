@@ -76,9 +76,9 @@ delivery retries never re-encrypt or create a new artifact for the backup ID.
 
 ## Driver interfaces
 
-Initial capture drivers are `mariadb`, `mongodb`, and `redis`. Planned later
-drivers include `files` and `garage`. Initial destination drivers are `local`
-and `s3`.
+Implemented capture drivers are `mariadb`, `mongodb`, `redis`, and `tar`.
+Planned later drivers include `garage`. Initial destination drivers are
+`local` and `s3`.
 
 S3 endpoints require HTTPS. Plain HTTP is accepted only for an origin whose
 host is the loopback-only `localhost`, `127.0.0.0/8`, or `::1`; this supports a
@@ -104,6 +104,15 @@ last-I/O lag, read-only mode, and promotion priority zero. It verifies the
 effective RDB path, requests `BGSAVE SCHEDULE`, waits for a newer successful
 `LASTSAVE`, and copies only the atomically published regular RDB into the
 ordinary artifact pipeline.
+
+Tar capture archives an explicit, bounded list of absolute filesystem paths
+with the system GNU tar. The executable and arguments are fixed by SaveToA;
+configuration cannot supply tar flags or shell text. Configured roots may not
+overlap or be symlinks, special files are rejected, and a symlink inside a
+selected tree may only resolve within another selected tree. Stored member
+names are relative to `/`. The completed uncompressed tar is staged in the
+private work directory before the common zstd, age, spool, and destination
+pipeline begins.
 
 ## Artifact format
 
@@ -141,6 +150,12 @@ operator contract makes that destructive boundary unmistakable.
 
 Restore verification against disposable services is a first-class feature, not
 an optional documentation exercise.
+
+Tar restores use the ordinary `restore` command. Safe relative symlinks,
+permissions, modification times, and numeric ownership when restoring as root
+are preserved. Absolute paths, traversal, escaping symlinks, hard links, device
+nodes, FIFOs, sockets, duplicate members, and extraction through symlinked
+parents are rejected before a partial target can be published.
 
 MongoDB restore verification does not accept an operator-supplied database
 endpoint. It materializes into a new explicit directory, starts a temporary

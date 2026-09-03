@@ -64,7 +64,7 @@ test suite.
   precede capture start.
 - `tool` identifies the native capture utility and its version.
 - `source.server_version` records the captured service version when the source
-  has one.
+  has one; it is empty for the `tar` driver.
 - `source.replication` contains driver-defined, non-secret replication
   coordinates. It is required and non-empty for database captures, and keys
   associated with passwords, tokens, credentials, and private keys are

@@ -13,9 +13,10 @@
 Restore verifies the completion marker, manifest binding, payload size, and
 SHA-256 before creating its destination. The destination must be an explicit,
 absolute, non-existing directory. Tar extraction rejects absolute and
-non-canonical paths, traversal, duplicates, links, and special files; a failed
-materialization removes only the destination it created. Restore never starts,
-stops, or replaces a service.
+non-canonical paths, traversal, duplicates, hard links, escaping symlinks, and
+special files. Safe relative symlinks cannot be used as extraction parents; a
+failed materialization removes only the destination it created. Restore never
+starts, stops, or replaces a service.
 
 S3 recovery treats every remote byte as untrusted. It validates the requested
 set path before network access, reads the completion marker before manifest and
@@ -59,6 +60,11 @@ The backup service cannot access `/etc/savetoa/maintenance-credentials.d`.
 The maintenance service cannot access source/upload credentials or encryption
 recipients. They share group-writable completed-set roots and the target-lock
 directory, but database filesystem ACLs remain assigned only to `savetoa`.
+
+Tar targets have no credentials or configurable command arguments. SaveToA
+invokes `/usr/bin/tar` directly with a minimal fixed environment and an option
+terminator. It rejects symlinked roots, overlapping roots, special files, and
+links whose resolved target falls outside all configured roots before capture.
 
 MongoDB credentials contain only a password in a mode-0600 file. Health checks
 use a direct official-driver connection to the configured member, and native

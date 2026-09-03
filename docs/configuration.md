@@ -21,13 +21,13 @@ duplicate fields are errors at every level. Environment, target, group, and
 destination names use lowercase ASCII letters, digits, `_`, and `-`; they must
 begin with a letter or digit and may contain at most 63 characters.
 
-The implemented target schemas are `mariadb`, `mongodb`, and `redis`. MariaDB requires
+The implemented target schemas are `mariadb`, `mongodb`, `redis`, and `tar`. MariaDB requires
 an absolute native option-file reference, a local socket, the expected replica
 source host, port and user, mandatory GTID/lag and preparation safety gates,
 and at least one destination. Other capture driver names fail closed until
 their own typed schemas are implemented.
 
-`run` supports MariaDB, MongoDB, and Redis targets with local and S3 destinations. Captures are
+`run` supports MariaDB, MongoDB, Redis, and tar targets with local and S3 destinations. Captures are
 staged below `/var/lib/savetoa/spool`, verified, and then delivered to every
 configured destination in destination-name order. A failed delivery leaves the
 completed staged set intact and reports its relative path. Retry that exact set
@@ -147,6 +147,37 @@ and optional age identity as `restore`. It requires matching Redis
 server/CLI versions and loads the RDB in a temporary loopback-only
 `redis-server` with AOF and automatic saves disabled. No live Redis endpoint
 or credentials can be supplied.
+
+Tar targets require 1 to 128 clean, absolute, non-root paths and do not accept
+credentials or capture options:
+
+```yaml
+driver: tar
+source:
+  paths:
+    - /etc/example-state
+    - /var/lib/example-state
+compression:
+  driver: zstd
+  level: 3
+```
+
+Configured paths must not be duplicated or overlap. At runtime each configured
+root must be a real directory or regular file rather than a symlink. Directory
+trees may contain regular files, directories, and relative symlinks whose
+resolved targets remain inside one of the configured roots; sockets, devices,
+FIFOs, and escaping or absolute symlinks fail closed. SaveToA invokes the fixed
+`/usr/bin/tar` executable directly with fixed GNU tar arguments and an option
+terminator. There is no configurable executable, argument list, shell text, or
+tar compression flag.
+
+Archive entries are rooted below `/` without a leading slash, so restoring the
+example into `/srv/restore` creates `/srv/restore/etc/example-state` and
+`/srv/restore/var/lib/example-state`. The ordinary `restore` command rejects
+absolute paths, traversal, unsafe links, special files, duplicate entries, and
+an existing destination. It preserves executable bits and modification times;
+when invoked as root it also restores numeric ownership. zstd compression and
+age encryption remain common transforms outside the tar driver.
 
 Config v1 currently accepts `zstd` compression and `age` recipient-file
 encryption. Local destinations require a clean absolute path other than `/`.

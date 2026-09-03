@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,6 +23,7 @@ import (
 	redisdriver "github.com/bionicman/savetoa/internal/redis"
 	"github.com/bionicman/savetoa/internal/restore"
 	statuspkg "github.com/bionicman/savetoa/internal/status"
+	"github.com/bionicman/savetoa/internal/tardriver"
 )
 
 func TestHelpIsSuccessful(t *testing.T) {
@@ -649,6 +652,61 @@ func TestExecuteRedisRunStagesDeliversAndMaterializesRDB(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(restoreDir, "dump.rdb"))
 	if err != nil || string(data) != "REDIS0012 pipeline snapshot" {
 		t.Fatalf("materialized RDB = %q, error=%v", data, err)
+	}
+}
+
+type cliTarRunner struct {
+	payload []byte
+}
+
+func (runner cliTarRunner) Version(context.Context) (string, error) { return "1.35", nil }
+
+func (runner cliTarRunner) Create(context.Context, []string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(runner.payload)), nil
+}
+
+func TestExecuteTarRunStagesDeliversAndMaterializesPaths(t *testing.T) {
+	root := t.TempDir()
+	paths := runPaths{work: makeDirectory(t, root, "work"), spool: makeDirectory(t, root, "spool"), locks: makeDirectory(t, root, "locks")}
+	destination := makeDirectory(t, root, "destination")
+	source := makeDirectory(t, root, "source")
+	if err := os.WriteFile(filepath.Join(source, "account.conf"), []byte("source probe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var payload bytes.Buffer
+	writer := tar.NewWriter(&payload)
+	data := []byte("captured ACME state")
+	if err := writer.WriteHeader(&tar.Header{Name: "var/lib/acme.sh/account.conf", Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(len(data))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := config.Target{
+		Driver: "tar", Source: config.MariaDBSource{Paths: []string{source}},
+		Compression:  &config.Compression{Driver: "zstd", Level: 3},
+		Destinations: map[string]config.Destination{"local": {Driver: "local", Path: destination}},
+	}
+	capturer := tardriver.NewCapturerWithRunner(cliTarRunner{payload: payload.Bytes()})
+	set, err := executeTarRun(context.Background(), "test", "production-acme", target, paths, capturer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.Manifest.CaptureDriver != "tar" || set.Manifest.Tool.Name != "tar" || set.Manifest.Artifact.Filename != "payload.tar.zst" {
+		t.Fatalf("manifest = %#v", set.Manifest)
+	}
+	restoreDir := filepath.Join(root, "restore-tar")
+	if _, err := restore.Materialize(context.Background(), restore.Options{
+		SourceRoot: destination, BackupID: set.Manifest.BackupID, TargetDir: restoreDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := os.ReadFile(filepath.Join(restoreDir, "var", "lib", "acme.sh", "account.conf"))
+	if err != nil || string(restored) != string(data) {
+		t.Fatalf("materialized tar file = %q, error=%v", restored, err)
 	}
 }
 

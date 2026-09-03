@@ -59,6 +59,37 @@ func TarZstdReader(ctx context.Context, rootPath string, level int) (io.ReadClos
 	return reader, nil
 }
 
+// ZstdReader applies the shared compression transform to an existing stream.
+func ZstdReader(ctx context.Context, input io.Reader, level int) (io.ReadCloser, error) {
+	if ctx == nil {
+		return nil, errors.New("context is required")
+	}
+	if input == nil {
+		return nil, errors.New("input reader is required")
+	}
+	if level < -5 || level > 22 {
+		return nil, errors.New("zstd level must be between -5 and 22")
+	}
+	reader, writer := io.Pipe()
+	go func() {
+		encoder, err := zstd.NewWriter(writer,
+			zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(level)),
+			zstd.WithEncoderConcurrency(1),
+		)
+		if err != nil {
+			_ = writer.CloseWithError(errors.New("initialize zstd encoder"))
+			return
+		}
+		_, err = copyContext(ctx, encoder, input)
+		closeErr := encoder.Close()
+		if err == nil {
+			err = closeErr
+		}
+		_ = writer.CloseWithError(err)
+	}()
+	return reader, nil
+}
+
 func validateRoot(path string) error {
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path || path == string(filepath.Separator) {
 		return errors.New("archive root must be a clean absolute path other than root")

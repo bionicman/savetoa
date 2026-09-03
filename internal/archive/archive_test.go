@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sys/unix"
@@ -121,11 +122,45 @@ func TestExtractTarMaterializesFilesIntoNewTarget(t *testing.T) {
 	}
 }
 
+func TestExtractTarPreservesExecutableModeTimeAndSafeSymlink(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	modified := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	data := []byte("#!/bin/sh\n")
+	if err := writer.WriteHeader(&tar.Header{Name: "etc/acme/archive/hook", Typeflag: tar.TypeReg, Mode: 0o750, Size: int64(len(data)), ModTime: modified}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteHeader(&tar.Header{Name: "etc/acme/live/hook", Typeflag: tar.TypeSymlink, Linkname: "../archive/hook", Mode: 0o777}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "restore")
+	if err := ExtractTar(context.Background(), &buffer, target); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(target, "etc", "acme", "archive", "hook"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o750 || !info.ModTime().Equal(modified) {
+		t.Fatalf("restored metadata = mode %o time %s", info.Mode().Perm(), info.ModTime())
+	}
+	link, err := os.Readlink(filepath.Join(target, "etc", "acme", "live", "hook"))
+	if err != nil || link != "../archive/hook" {
+		t.Fatalf("restored symlink = %q, error = %v", link, err)
+	}
+}
+
 func TestExtractTarRejectsUnsafeEntriesAndRemovesPartialTarget(t *testing.T) {
 	tests := map[string]*tar.Header{
 		"traversal": {Name: "../escape", Typeflag: tar.TypeReg, Mode: 0o600},
 		"absolute":  {Name: "/escape", Typeflag: tar.TypeReg, Mode: 0o600},
-		"symlink":   {Name: "link", Typeflag: tar.TypeSymlink, Linkname: "outside", Mode: 0o777},
+		"symlink":   {Name: "link", Typeflag: tar.TypeSymlink, Linkname: "../outside", Mode: 0o777},
 		"hardlink":  {Name: "link", Typeflag: tar.TypeLink, Linkname: "outside", Mode: 0o600},
 	}
 	for name, header := range tests {
@@ -147,6 +182,30 @@ func TestExtractTarRejectsUnsafeEntriesAndRemovesPartialTarget(t *testing.T) {
 				t.Fatalf("partial restore remains: %v", err)
 			}
 		})
+	}
+}
+
+func TestExtractTarRejectsExtractionThroughSymlinkParent(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	if err := writer.WriteHeader(&tar.Header{Name: "real", Typeflag: tar.TypeDir, Mode: 0o700}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteHeader(&tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "real", Mode: 0o777}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteHeader(&tar.Header{Name: "link/file", Typeflag: tar.TypeReg, Mode: 0o600}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "restore")
+	if err := ExtractTar(context.Background(), &buffer, target); err == nil || !strings.Contains(err.Error(), "not a real directory") {
+		t.Fatalf("ExtractTar(symlink parent) error = %v", err)
+	}
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial restore remains: %v", err)
 	}
 }
 

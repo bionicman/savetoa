@@ -128,7 +128,7 @@ func (manifest Manifest) Validate() error {
 		return fmt.Errorf("target must match %s", targetPattern.String())
 	}
 	switch manifest.CaptureDriver {
-	case "mariadb", "mongodb", "redis", "files", "garage":
+	case "mariadb", "mongodb", "redis", "tar", "garage":
 	default:
 		return fmt.Errorf("unsupported capture_driver %q", manifest.CaptureDriver)
 	}
@@ -141,7 +141,7 @@ func (manifest Manifest) Validate() error {
 	if manifest.Tool.Name == "" || manifest.Tool.Version == "" {
 		return errors.New("tool.name and tool.version are required")
 	}
-	if manifest.CaptureDriver != "files" && manifest.Source.ServerVersion == "" {
+	if manifest.CaptureDriver != "tar" && manifest.Source.ServerVersion == "" {
 		return errors.New("source.server_version is required")
 	}
 	if manifest.Source.Replication == nil {

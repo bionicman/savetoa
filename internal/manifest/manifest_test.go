@@ -129,6 +129,21 @@ func TestParseRejectsMultipleJSONValues(t *testing.T) {
 	}
 }
 
+func TestTarManifestAllowsNoServerOrReplicationMetadata(t *testing.T) {
+	value := validManifest()
+	value.Target = "example-files"
+	value.CaptureDriver = "tar"
+	value.Tool = Tool{Name: "tar", Version: "1.35"}
+	value.Source = Source{Replication: map[string]string{}}
+	data, err := Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(data); err != nil {
+		t.Fatalf("Parse(tar manifest) error = %v", err)
+	}
+}
+
 func TestReadRejectsOversizedManifest(t *testing.T) {
 	data := strings.Repeat("x", MaxFileSize+1)
 	_, err := Read(strings.NewReader(data))

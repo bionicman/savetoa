@@ -28,6 +28,8 @@ Semantic Versioning after its first stable release.
   common pipeline, and replay verification in a disposable local mongod.
 - Redis read-only replica health gates, fresh BGSAVE/RDB capture through the
   common pipeline, and load verification in a disposable local redis-server.
+- GNU tar capture of explicit filesystem paths through the common compression,
+  encryption, spool, and destination pipeline, with safe symlink restoration.
 - Fail-closed GFS retention across the spool, local destinations, and S3, with
   marker-first deletion and separate maintenance credentials and execution identity.
 - Deterministic text and JSON repository inventory with monitoring exit codes
