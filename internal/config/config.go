@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	objectpath "path"
 	"path/filepath"
@@ -419,8 +420,8 @@ func (destination Destination) validate() error {
 			}
 		}
 		endpoint, err := url.Parse(destination.Endpoint)
-		if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Path != "" && endpoint.Path != "/") {
-			return errors.New("endpoint must be an HTTPS URL containing only an origin, without credentials, path, query, or fragment")
+		if err != nil || !validS3Endpoint(endpoint) {
+			return errors.New("endpoint must be an HTTPS origin, or an HTTP origin on a loopback host, without credentials, path, query, or fragment")
 		}
 		if !regionPattern.MatchString(destination.Region) {
 			return errors.New("region must be a lowercase S3 signing region")
@@ -436,6 +437,20 @@ func (destination Destination) validate() error {
 		return fmt.Errorf("unsupported destination driver %q", destination.Driver)
 	}
 	return nil
+}
+
+func validS3Endpoint(endpoint *url.URL) bool {
+	if endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Path != "" && endpoint.Path != "/") {
+		return false
+	}
+	if endpoint.Scheme == "https" {
+		return true
+	}
+	if endpoint.Scheme != "http" {
+		return false
+	}
+	host := endpoint.Hostname()
+	return strings.EqualFold(host, "localhost") || net.ParseIP(host).IsLoopback()
 }
 
 func (retention Retention) validate() error {

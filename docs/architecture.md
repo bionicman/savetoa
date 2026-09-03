@@ -74,6 +74,10 @@ Initial capture drivers are `mariadb`, `mongodb`, and `redis`. Planned later
 drivers include `files` and `garage`. Initial destination drivers are `local`
 and `s3`.
 
+S3 endpoints require HTTPS. Plain HTTP is accepted only for an origin whose
+host is the loopback-only `localhost`, `127.0.0.0/8`, or `::1`; this supports a
+co-located S3-compatible service without permitting cleartext remote storage.
+
 Driver configuration is namespaced below its target. Unknown fields must be
 rejected so a misspelled safety option cannot silently fall back to a default.
 

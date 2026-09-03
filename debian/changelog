@@ -1,3 +1,9 @@
+savetoa (0.1.0-12) unstable; urgency=medium
+
+  * Allow unencrypted S3 transport only to loopback endpoints.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Thu, 03 Sep 2026 10:45:00 +0000
+
 savetoa (0.1.0-11) unstable; urgency=medium
 
   * Add fail-closed local and S3 retention with a separate maintenance identity.

@@ -244,9 +244,9 @@ func TestParseFailsClosed(t *testing.T) {
 			data: strings.Replace(validConfig, "path: /var/backups/savetoa", "path: /var/backups/savetoa\n        bucket: misplaced", 1),
 			want: "local destination contains S3-only fields",
 		},
-		"insecure endpoint": {
+		"insecure remote endpoint": {
 			data: strings.Replace(validConfig, "https://s3.example.invalid", "http://s3.example.invalid", 1),
-			want: "endpoint must be an HTTPS URL",
+			want: "endpoint must be an HTTPS origin",
 		},
 		"unknown group target": {
 			data: strings.Replace(validConfig, "- example-mariadb", "- missing-target", 1),
@@ -266,6 +266,38 @@ func TestParseFailsClosed(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Parse() error = %q, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestParseAllowsLoopbackHTTPForS3(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://localhost:3900",
+		"http://127.0.0.1:3900",
+		"http://[::1]:3900",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			data := strings.Replace(validConfig, "https://s3.example.invalid", endpoint, 1)
+			if _, err := Parse([]byte(data)); err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestParseRejectsNonLoopbackHTTPForS3(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://localhost.example:3900",
+		"http://127.0.0.2.example:3900",
+		"http://0.0.0.0:3900",
+		"http://[::]:3900",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			data := strings.Replace(validConfig, "https://s3.example.invalid", endpoint, 1)
+			_, err := Parse([]byte(data))
+			if err == nil || !strings.Contains(err.Error(), "endpoint must be an HTTPS origin") {
+				t.Fatalf("Parse() error = %v, want loopback HTTP rejection", err)
 			}
 		})
 	}
