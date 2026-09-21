@@ -161,6 +161,39 @@ targets:
 groups: {}
 `
 
+const validPostgreSQLConfig = `
+config_version: 1
+environment: example
+targets:
+  cluster:
+    driver: postgresql-base
+    credentials:
+      file: /etc/savetoa/credentials.d/cluster.pgpass
+    source:
+      host: 127.0.0.1
+      port: 5432
+      username: backup
+      require_standby: true
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+  database:
+    driver: postgresql-dump
+    credentials:
+      file: /etc/savetoa/credentials.d/database.pgpass
+    source:
+      host: 127.0.0.1
+      port: 5432
+      username: backup
+      database: appdb
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+groups: {}
+`
+
 func TestParseValidConfiguration(t *testing.T) {
 	parsed, err := Parse([]byte(validConfig))
 	if err != nil {
@@ -285,6 +318,33 @@ func TestSQLite3ConfigurationFailsClosed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse([]byte(input)); err == nil {
 				t.Fatal("Parse(unsafe SQLite3) succeeded")
+			}
+		})
+	}
+}
+
+func TestPostgreSQLConfigurationModesAndFailClosed(t *testing.T) {
+	parsed, err := Parse([]byte(validPostgreSQLConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Targets["cluster"].Source.RequireStandby == nil || !*parsed.Targets["cluster"].Source.RequireStandby || parsed.Targets["database"].Source.Database != "appdb" {
+		t.Fatal("PostgreSQL modes not decoded")
+	}
+	tests := map[string]string{
+		"base without standby":           strings.Replace(validPostgreSQLConfig, "      require_standby: true\n", "", 1),
+		"dump with standby":              strings.Replace(validPostgreSQLConfig, "      database: appdb\n", "      database: appdb\n      require_standby: true\n", 1),
+		"dump with false standby option": strings.Replace(validPostgreSQLConfig, "      database: appdb\n", "      database: appdb\n      require_standby: false\n", 1),
+		"dump without database":          strings.Replace(validPostgreSQLConfig, "      database: appdb\n", "", 1),
+		"connection string host":         strings.Replace(validPostgreSQLConfig, "host: 127.0.0.1", "host: 'postgresql://evil'", 1),
+		"remote host":                    strings.Replace(validPostgreSQLConfig, "host: 127.0.0.1", "host: db.internal", 1),
+		"foreign capture option":         strings.Replace(validPostgreSQLConfig, "    destinations:\n", "    capture:\n      full: true\n    destinations:\n", 1),
+		"unknown field":                  strings.Replace(validPostgreSQLConfig, "      database: appdb\n", "      database: appdb\n      command: pg_dump --password=secret\n", 1),
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(input)); err == nil {
+				t.Fatal("unsafe PostgreSQL configuration accepted")
 			}
 		})
 	}

@@ -19,6 +19,10 @@ perform equivalent hidden/non-voting SECONDARY gates and capture a full
 priority-zero replica and package a newly completed `BGSAVE SCHEDULE` RDB.
 SQLite targets use the native online backup API through a fixed `sqlite3` CLI
 invocation and validate both the live source and standalone snapshot.
+PostgreSQL targets separately support whole-cluster standby base backups and
+single-database custom-format dumps, each with native archive checks.
+`./scripts/smoke-postgresql.sh` exercises both formats and disposable restores
+using temporary Docker PostgreSQL 18 instances.
 Tar targets archive explicit filesystem paths with fixed GNU tar arguments;
 compression and encryption remain common transforms rather than tar options.
 `doctor` performs the corresponding topology, lag, persistence, and

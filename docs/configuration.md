@@ -21,13 +21,14 @@ duplicate fields are errors at every level. Environment, target, group, and
 destination names use lowercase ASCII letters, digits, `_`, and `-`; they must
 begin with a letter or digit and may contain at most 63 characters.
 
-The implemented target schemas are `mariadb`, `mongodb`, `redis`, `sqlite3`, and `tar`. MariaDB requires
+The implemented target schemas are `mariadb`, `mongodb`, `redis`, `sqlite3`,
+`postgresql-base`, `postgresql-dump`, and `tar`. MariaDB requires
 an absolute native option-file reference, a local socket, the expected replica
 source host, port and user, mandatory GTID/lag and preparation safety gates,
 and at least one destination. Other capture driver names fail closed until
 their own typed schemas are implemented.
 
-`run` supports MariaDB, MongoDB, Redis, SQLite, and tar targets with local and S3 destinations. Captures are
+`run` supports MariaDB, MongoDB, Redis, SQLite, PostgreSQL, and tar targets with local and S3 destinations. Captures are
 staged below `/var/lib/savetoa/spool`, verified, and then delivered to every
 configured destination in destination-name order. A failed delivery leaves the
 completed staged set intact and reports its relative path. Retry that exact set
@@ -178,6 +179,66 @@ enters SQL or dot-command text, and configuration cannot select an executable,
 SQLite flags, SQL, output filename, or shell fragment. The ordinary `restore`
 command safely materializes `database.sqlite3` into a new explicit directory
 without replacing or opening a live application database.
+
+PostgreSQL has two deliberately separate target drivers:
+
+```yaml
+driver: postgresql-base
+credentials:
+  file: /etc/savetoa/credentials.d/cluster.pgpass
+source:
+  host: 127.0.0.1
+  port: 5432
+  username: backup
+  require_standby: true
+```
+
+`postgresql-base` captures the entire cluster from a standby using
+`pg_basebackup --format=tar --wal-method=stream`. Its native tar files,
+including tablespaces and streamed WAL, are nested in the SaveToA payload.
+`pg_verifybackup` checks the backup manifest and file contents before delivery.
+Because PostgreSQL cannot parse WAL in tar-format verification, this check is
+not a substitute for a disposable test restore. This mode does not accept a
+database name, and fails if the source is a primary. The source needs a
+replication-capable account in addition to a normal connection to the
+`postgres` database for the standby check. PostgreSQL client tools 17 or newer
+are required for tar-format verification.
+
+```yaml
+driver: postgresql-dump
+credentials:
+  file: /etc/savetoa/credentials.d/database.pgpass
+source:
+  host: 127.0.0.1
+  port: 5432
+  username: backup
+  database: appdb
+```
+
+`postgresql-dump` captures exactly one database with `pg_dump --format=custom`
+into `database.dump`. `pg_restore` reads the archive and emits a recovery SQL
+script to `/dev/null` to check that archived data can be decoded. It does not
+prove that every object can be replayed. Neither mode
+includes a live-service restore command: ordinary `restore` only materializes
+the native files into a new explicit directory for an operator-controlled
+recovery exercise. A logical dump is not a cluster backup: roles, tablespaces,
+and other cluster-wide state are outside its scope.
+
+Both modes use a native PostgreSQL password file, not a YAML password. The
+configured file must be an absolute, non-symlink, mode-`0600` regular file.
+It is supplied via `PGPASSFILE`; passwords never enter argv or the manifest.
+For the base mode, supply entries for both `postgres` and `replication`
+connections. Source host, port, username, and logical database name are
+validated as non-secret, non-connection-string fields. Native PostgreSQL error
+text is not copied into SaveToA errors.
+This initial contract accepts only loopback source hosts (`localhost` or
+`127.0.0.1`); remote TLS trust configuration is not yet modeled.
+
+An opt-in integration exercise is available as `./scripts/smoke-postgresql.sh`.
+It needs Docker and Go, creates only temporary isolated PostgreSQL 18
+containers and storage, rejects a primary for physical capture, and restores
+both completed formats into disposable PostgreSQL instances before comparing
+test data. It does not connect to deployment databases.
 
 Tar targets require 1 to 128 clean, absolute, non-root paths and do not accept
 credentials or capture options:

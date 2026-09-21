@@ -1,3 +1,9 @@
+savetoa (0.1.0-19) unstable; urgency=medium
+
+  * Add PostgreSQL standby base-backup and single-database dump capture.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Mon, 21 Sep 2026 11:53:16 +0100
+
 savetoa (0.1.0-18) unstable; urgency=medium
 
   * Add consistent SQLite online-backup capture.

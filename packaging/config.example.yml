@@ -188,6 +188,34 @@ targets:
         driver: local
         path: /var/backups/savetoa
 
+  example-postgresql-cluster:
+    driver: postgresql-base
+    credentials:
+      file: /etc/savetoa/credentials.d/postgresql-cluster.pgpass
+    source:
+      host: 127.0.0.1
+      port: 5432
+      username: backup
+      require_standby: true
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+
+  example-postgresql-database:
+    driver: postgresql-dump
+    credentials:
+      file: /etc/savetoa/credentials.d/postgresql-database.pgpass
+    source:
+      host: 127.0.0.1
+      port: 5432
+      username: backup
+      database: appdb
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+
 groups:
   example-databases:
     targets:
@@ -195,6 +223,8 @@ groups:
       - example-mongodb
       - example-redis
       - example-sqlite
+      - example-postgresql-cluster
+      - example-postgresql-database
   example-filesystems:
     targets:
       - example-files

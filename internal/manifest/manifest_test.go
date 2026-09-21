@@ -25,6 +25,37 @@ func TestMarshalParseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPostgreSQLManifestModes(t *testing.T) {
+	for _, driver := range []string{"postgresql-base", "postgresql-dump"} {
+		t.Run(driver, func(t *testing.T) {
+			value := validManifest()
+			value.CaptureDriver = driver
+			value.Tool.Name = "pg_basebackup"
+			value.Source.Replication = map[string]string{}
+			if driver == "postgresql-dump" {
+				value.Tool.Name = "pg_dump"
+				value.Source.Database = "appdb"
+			}
+			data, err := Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := Parse(data)
+			if err != nil || parsed.Source.Database != value.Source.Database {
+				t.Fatalf("parsed=%#v err=%v", parsed, err)
+			}
+			if driver == "postgresql-dump" {
+				value.Source.Database = ""
+			} else {
+				value.Source.Database = "appdb"
+			}
+			if err := value.Validate(); err == nil {
+				t.Fatal("invalid mode provenance accepted")
+			}
+		})
+	}
+}
+
 func TestDocumentedExampleMatchesSchema(t *testing.T) {
 	path := filepath.Join("..", "..", "docs", "manifest-v1.example.json")
 	data, err := os.ReadFile(path)

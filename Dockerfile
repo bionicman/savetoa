@@ -17,6 +17,7 @@ RUN apt-get update \
         libc6-dev \
         make \
         sqlite3 \
+        postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 RUN case "${TARGETARCH}" in \

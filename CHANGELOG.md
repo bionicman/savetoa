@@ -32,6 +32,10 @@ Semantic Versioning after its first stable release.
   encryption, spool, and destination pipeline, with safe symlink restoration.
 - Consistent SQLite online-backup capture with pre- and post-capture integrity
   checks through the common artifact pipeline.
+- Separate PostgreSQL standby base-backup and single-database dump capture
+  drivers with protected pgpass authentication and native archive checks.
+- Opt-in PostgreSQL Docker smoke covering standby gating and disposable replay
+  of both completed backup formats.
 - Fail-closed GFS retention across the spool, local destinations, and S3, with
   marker-first deletion and separate maintenance credentials and execution identity.
 - Deterministic text and JSON repository inventory with monitoring exit codes

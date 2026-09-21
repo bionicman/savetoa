@@ -20,6 +20,7 @@ import (
 	"github.com/bionicman/savetoa/internal/manifest"
 	"github.com/bionicman/savetoa/internal/mariadb"
 	"github.com/bionicman/savetoa/internal/mongodb"
+	"github.com/bionicman/savetoa/internal/postgresql"
 	redisdriver "github.com/bionicman/savetoa/internal/redis"
 	"github.com/bionicman/savetoa/internal/restore"
 	sqlite3driver "github.com/bionicman/savetoa/internal/sqlite3"
@@ -717,6 +718,73 @@ func TestExecuteSQLite3RunStagesDeliversAndMaterializesDatabase(t *testing.T) {
 	}
 	if runner.calls == 0 {
 		t.Fatal("SQLite capture runner was not called")
+	}
+}
+
+type cliPostgreSQLRunner struct{}
+
+func (cliPostgreSQLRunner) Version(context.Context, string) (string, error) { return "18.1", nil }
+func (cliPostgreSQLRunner) Probe(context.Context, config.Target) (string, bool, error) {
+	return "18.1", true, nil
+}
+func (cliPostgreSQLRunner) Capture(_ context.Context, target config.Target, directory string) error {
+	name := "database.dump"
+	if target.Driver == "postgresql-base" {
+		name = "base.tar"
+	}
+	if err := os.WriteFile(filepath.Join(directory, name), []byte("captured PostgreSQL"), 0o600); err != nil {
+		return err
+	}
+	if target.Driver == "postgresql-base" {
+		if err := os.WriteFile(filepath.Join(directory, "pg_wal.tar"), []byte("wal"), 0o600); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(directory, "backup_manifest"), []byte("manifest"), 0o600)
+	}
+	return nil
+}
+func (cliPostgreSQLRunner) Verify(context.Context, config.Target, string) error { return nil }
+
+func TestExecutePostgreSQLRunStagesBothFormats(t *testing.T) {
+	for _, driver := range []string{"postgresql-base", "postgresql-dump"} {
+		t.Run(driver, func(t *testing.T) {
+			root := t.TempDir()
+			paths := runPaths{work: makeDirectory(t, root, "work"), spool: makeDirectory(t, root, "spool"), locks: makeDirectory(t, root, "locks")}
+			destination := makeDirectory(t, root, "destination")
+			passfile := filepath.Join(root, "pgpass")
+			if err := os.WriteFile(passfile, []byte("localhost:5432:*:backup:secret\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			target := config.Target{Driver: driver, Credentials: config.FileReference{File: passfile},
+				Source:       config.MariaDBSource{Host: "localhost", Port: 5432, Username: "backup", Database: "appdb"},
+				Destinations: map[string]config.Destination{"local": {Driver: "local", Path: destination}}}
+			if driver == "postgresql-base" {
+				target.Source.Database = ""
+				required := true
+				target.Source.RequireStandby = &required
+			}
+			set, err := executePostgreSQLRun(context.Background(), "test", "postgresql", target, paths, postgresql.NewCapturerWithRunner(cliPostgreSQLRunner{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if set.Manifest.CaptureDriver != driver || set.Manifest.Tool.Version != "18.1" {
+				t.Fatalf("manifest=%#v", set.Manifest)
+			}
+			if set.Manifest.Source.Database != target.Source.Database {
+				t.Fatalf("database provenance=%q, want %q", set.Manifest.Source.Database, target.Source.Database)
+			}
+			restored := filepath.Join(root, "restored")
+			if _, err := restore.Materialize(context.Background(), restore.Options{SourceRoot: destination, BackupID: set.Manifest.BackupID, TargetDir: restored}); err != nil {
+				t.Fatal(err)
+			}
+			name := "database.dump"
+			if driver == "postgresql-base" {
+				name = "base.tar"
+			}
+			if data, err := os.ReadFile(filepath.Join(restored, name)); err != nil || string(data) != "captured PostgreSQL" {
+				t.Fatalf("restored %s: %q %v", name, data, err)
+			}
+		})
 	}
 }
 

@@ -75,6 +75,15 @@ enter SQLite command text. Native output is not copied into errors. Access to
 the database and any live WAL/SHM state must be granted narrowly by deployment
 configuration; package installation grants none.
 
+PostgreSQL capture uses fixed native tools and a minimal child environment.
+The only credential input is a protected mode-0600 native `pgpass` file named
+through `PGPASSFILE`; passwords do not enter process arguments, errors, or
+manifests. Physical capture rejects a primary and uses tar format so external
+tablespaces cannot cause `pg_basebackup` to write to their original paths.
+PostgreSQL native stdout and stderr are discarded on failure. PostgreSQL
+restore remains operator-controlled materialization into a new directory;
+SaveToA does not connect to or overwrite a running PostgreSQL service.
+
 MongoDB credentials contain only a password in a mode-0600 file. Health checks
 use a direct official-driver connection to the configured member, and native
 capture receives that same file through `mongodump --config`; neither path

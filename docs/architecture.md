@@ -76,7 +76,8 @@ delivery retries never re-encrypt or create a new artifact for the backup ID.
 
 ## Driver interfaces
 
-Implemented capture drivers are `mariadb`, `mongodb`, `redis`, `sqlite3`, and `tar`.
+Implemented capture drivers are `mariadb`, `mongodb`, `redis`, `sqlite3`,
+`postgresql-base`, `postgresql-dump`, and `tar`.
 Planned later drivers include `garage`. Initial destination drivers are
 `local` and `s3`.
 
@@ -123,6 +124,17 @@ The output path and SQLite commands are fixed by SaveToA; configuration cannot
 supply SQL, CLI flags, or executable paths. The online backup incorporates
 committed WAL state into the standalone snapshot, so WAL and SHM sidecars are
 not copied as separate artifacts.
+
+PostgreSQL has two distinct capture contracts. `postgresql-base` accepts only a
+standby and captures the whole cluster with native tar-format `pg_basebackup`
+and streamed WAL; `postgresql-dump` captures one named database as a custom
+`pg_dump` archive. The former is checked with `pg_verifybackup` (tar checksums,
+but not WAL parsing); the latter is decoded to `/dev/null` with `pg_restore`. Both
+outputs enter the common artifact pipeline as files in a private work tree.
+Neither mode claims a successful disposable replay, and ordinary `restore`
+only materializes the native files to an explicit new directory.
+The opt-in PostgreSQL smoke script separately replays both materialized
+formats into disposable servers; capture itself never starts a restore server.
 
 ## Artifact format
 

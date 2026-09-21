@@ -59,6 +59,8 @@ type MariaDBSource struct {
 	Host                   string             `yaml:"host,omitempty"`
 	Port                   int                `yaml:"port,omitempty"`
 	Username               string             `yaml:"username,omitempty"`
+	Database               string             `yaml:"database,omitempty"`
+	RequireStandby         *bool              `yaml:"require_standby,omitempty"`
 	AuthenticationDatabase string             `yaml:"authentication_database,omitempty"`
 	RDBFile                string             `yaml:"rdb_file,omitempty"`
 	Replica                MariaDBReplicaGate `yaml:"replica"`
@@ -200,6 +202,10 @@ func (config Config) Validate() error {
 }
 
 func (target Target) validate() error {
+	if target.Driver != "postgresql-base" && target.Driver != "postgresql-dump" &&
+		(target.Source.Database != "" || target.Source.RequireStandby != nil) {
+		return errors.New("target contains PostgreSQL-only source fields")
+	}
 	switch target.Driver {
 	case "mariadb":
 		if err := target.validateMariaDB(); err != nil {
@@ -219,6 +225,10 @@ func (target Target) validate() error {
 		}
 	case "sqlite3":
 		if err := target.validateSQLite3(); err != nil {
+			return err
+		}
+	case "postgresql-base", "postgresql-dump":
+		if err := target.validatePostgreSQL(); err != nil {
 			return err
 		}
 	default:
@@ -401,6 +411,39 @@ func (target Target) validateSQLite3() error {
 		return errors.New("sqlite3 target contains capture options")
 	}
 	return validateAbsolutePath("source.path", target.Source.Path, true)
+}
+
+func (target Target) validatePostgreSQL() error {
+	if err := target.Credentials.validate("credentials.file"); err != nil {
+		return err
+	}
+	if len(target.Source.Paths) != 0 || target.Source.Path != "" || target.Source.Socket != "" ||
+		target.Source.AuthenticationDatabase != "" || target.Source.RDBFile != "" ||
+		target.Source.Replica != (MariaDBReplicaGate{}) || target.Capture != (MariaDBCapture{}) {
+		return errors.New("postgresql target contains fields for another driver")
+	}
+	if target.Source.Host != "localhost" && target.Source.Host != "127.0.0.1" {
+		return errors.New("source.host must be a loopback host for PostgreSQL")
+	}
+	if target.Source.Port < 1 || target.Source.Port > 65535 {
+		return errors.New("source.port must be between 1 and 65535")
+	}
+	if err := validateName("source.username", target.Source.Username); err != nil {
+		return err
+	}
+	if target.Driver == "postgresql-base" {
+		if target.Source.RequireStandby == nil || !*target.Source.RequireStandby || target.Source.Database != "" {
+			return errors.New("postgresql-base requires source.require_standby and forbids source.database")
+		}
+	} else {
+		if target.Source.RequireStandby != nil {
+			return errors.New("postgresql-dump does not accept source.require_standby")
+		}
+		if err := validateName("source.database", target.Source.Database); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (target Target) validateCommon() error {
