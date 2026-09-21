@@ -22,6 +22,7 @@ import (
 	"github.com/bionicman/savetoa/internal/mongodb"
 	redisdriver "github.com/bionicman/savetoa/internal/redis"
 	"github.com/bionicman/savetoa/internal/restore"
+	sqlite3driver "github.com/bionicman/savetoa/internal/sqlite3"
 	statuspkg "github.com/bionicman/savetoa/internal/status"
 	"github.com/bionicman/savetoa/internal/tardriver"
 )
@@ -652,6 +653,70 @@ func TestExecuteRedisRunStagesDeliversAndMaterializesRDB(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(restoreDir, "dump.rdb"))
 	if err != nil || string(data) != "REDIS0012 pipeline snapshot" {
 		t.Fatalf("materialized RDB = %q, error=%v", data, err)
+	}
+}
+
+type cliSQLite3Runner struct {
+	payload []byte
+	calls   int
+}
+
+func (runner *cliSQLite3Runner) Version(context.Context) (string, error) {
+	runner.calls++
+	return "3.46.1", nil
+}
+
+func (runner *cliSQLite3Runner) QuickCheck(context.Context, string) error {
+	runner.calls++
+	return nil
+}
+
+func (runner *cliSQLite3Runner) Backup(_ context.Context, _ string, directory string) error {
+	runner.calls++
+	return os.WriteFile(filepath.Join(directory, "database.sqlite3"), runner.payload, 0o600)
+}
+
+func TestExecuteSQLite3RunStagesDeliversAndMaterializesDatabase(t *testing.T) {
+	root := t.TempDir()
+	paths := runPaths{work: makeDirectory(t, root, "work"), spool: makeDirectory(t, root, "spool"), locks: makeDirectory(t, root, "locks")}
+	destination := makeDirectory(t, root, "destination")
+	source := filepath.Join(root, "application.sqlite3")
+	if err := os.WriteFile(source, []byte("source database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	source, err = filepath.EvalSymlinks(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("consistent SQLite snapshot")
+	target := config.Target{
+		Driver:       "sqlite3",
+		Source:       config.MariaDBSource{Path: source},
+		Compression:  &config.Compression{Driver: "zstd", Level: 3},
+		Destinations: map[string]config.Destination{"local": {Driver: "local", Path: destination}},
+	}
+	runner := &cliSQLite3Runner{payload: payload}
+	set, err := executeSQLite3Run(context.Background(), "test", "application-sqlite", target, paths, sqlite3driver.NewCapturerWithRunner(runner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.Manifest.CaptureDriver != "sqlite3" || set.Manifest.Tool.Name != "sqlite3" ||
+		set.Manifest.Source.ServerVersion != "3.46.1" || len(set.Manifest.Source.Replication) != 0 {
+		t.Fatalf("manifest = %#v", set.Manifest)
+	}
+	restoreDir := filepath.Join(root, "restore-sqlite")
+	if _, err := restore.Materialize(context.Background(), restore.Options{
+		SourceRoot: destination, BackupID: set.Manifest.BackupID, TargetDir: restoreDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := os.ReadFile(filepath.Join(restoreDir, "database.sqlite3"))
+	if err != nil || string(restored) != string(payload) {
+		t.Fatalf("materialized SQLite database = %q, error=%v", restored, err)
+	}
+	if runner.calls == 0 {
+		t.Fatal("SQLite capture runner was not called")
 	}
 }
 

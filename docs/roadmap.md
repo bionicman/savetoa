@@ -17,7 +17,8 @@ Development should proceed through short restore-tested increments.
 11. [ ] Connect status freshness and completeness checks to monitoring alerts.
 12. [x] Add optional root-managed lifecycle event hooks for external telemetry.
 13. [x] Add generic tar capture for filesystem and ACME state.
-14. [ ] Design Garage metadata backup and S3-to-S3 migration as separate drivers.
+14. [x] Add consistent SQLite online-backup capture.
+15. [ ] Design Garage metadata backup and S3-to-S3 migration as separate drivers.
 
 Full/incremental optimization follows measured data growth. Correct,
 restore-tested full backups are preferable to an early complex incremental

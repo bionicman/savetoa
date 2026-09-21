@@ -32,6 +32,7 @@ import (
 	"github.com/bionicman/savetoa/internal/restore"
 	"github.com/bionicman/savetoa/internal/s3store"
 	"github.com/bionicman/savetoa/internal/spool"
+	sqlite3driver "github.com/bionicman/savetoa/internal/sqlite3"
 	statuspkg "github.com/bionicman/savetoa/internal/status"
 	"github.com/bionicman/savetoa/internal/tardriver"
 	"github.com/bionicman/savetoa/internal/targetlock"
@@ -103,6 +104,10 @@ type redisCapturer interface {
 
 type tarCapturer interface {
 	Capture(context.Context, config.Target, string) (*tardriver.Capture, error)
+}
+
+type sqlite3Capturer interface {
+	Capture(context.Context, config.Target, string) (*sqlite3driver.Capture, error)
 }
 
 var plannedCommands = []string{
@@ -790,6 +795,8 @@ func runBackup(configPath string, args []string, stdout, stderr io.Writer) (code
 		set, err = executeRedisRun(ctx, configuration.Environment, targetName, target, defaultRunPaths, redisdriver.NewCapturer())
 	case "tar":
 		set, err = executeTarRun(ctx, configuration.Environment, targetName, target, defaultRunPaths, tardriver.NewCapturer())
+	case "sqlite3":
+		set, err = executeSQLite3Run(ctx, configuration.Environment, targetName, target, defaultRunPaths, sqlite3driver.NewCapturer())
 	default:
 		fmt.Fprintf(stderr, "savetoa: run does not support driver %q\n", target.Driver)
 		return 1
@@ -802,6 +809,151 @@ func runBackup(configPath string, args []string, stdout, stderr io.Writer) (code
 	fmt.Fprintf(stdout, "target=%s driver=%s status=complete backup_id=%s path=%s\n",
 		targetName, target.Driver, set.Manifest.BackupID, set.RelativePath)
 	return 0
+}
+
+func executeSQLite3Run(
+	ctx context.Context,
+	environment string,
+	targetName string,
+	target config.Target,
+	paths runPaths,
+	capturer sqlite3Capturer,
+) (*localstore.Set, error) {
+	if ctx == nil || capturer == nil {
+		return nil, errors.New("context and SQLite capturer are required")
+	}
+	type destinationHandle struct {
+		name   string
+		driver string
+		local  *localstore.Store
+		s3     *s3store.Store
+	}
+	destinations := make([]destinationHandle, 0, len(target.Destinations))
+	for name, destination := range target.Destinations {
+		handle := destinationHandle{name: name, driver: destination.Driver}
+		switch destination.Driver {
+		case "local":
+			store, err := localstore.New(destination.Path)
+			if err != nil {
+				return nil, fmt.Errorf("open destination %q: %w", name, err)
+			}
+			handle.local = store
+		case "s3":
+			store, err := openS3Destination(destination)
+			if err != nil {
+				return nil, fmt.Errorf("open destination %q: %w", name, err)
+			}
+			handle.s3 = store
+		default:
+			return nil, fmt.Errorf("destination %q: driver %q is not implemented", name, destination.Driver)
+		}
+		destinations = append(destinations, handle)
+	}
+	defer func() {
+		for _, destination := range destinations {
+			if destination.local != nil {
+				_ = destination.local.Close()
+			}
+		}
+	}()
+	if len(destinations) == 0 {
+		return nil, errors.New("at least one destination is required")
+	}
+	slices.SortFunc(destinations, func(left, right destinationHandle) int {
+		return strings.Compare(left.name, right.name)
+	})
+
+	var encryptor *agecrypto.Encryptor
+	if target.Encryption != nil {
+		file, err := openRegularFile(target.Encryption.RecipientsFile)
+		if err != nil {
+			return nil, fmt.Errorf("open age recipients: %w", err)
+		}
+		encryptor, err = agecrypto.ParseRecipients(file)
+		closeErr := file.Close()
+		if err != nil {
+			return nil, err
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("close age recipients: %w", closeErr)
+		}
+	}
+	locks, err := targetlock.New(paths.locks)
+	if err != nil {
+		return nil, err
+	}
+	defer locks.Close()
+	lock, err := locks.Acquire(ctx, targetName)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Release()
+
+	started := time.Now().UTC()
+	capture, err := capturer.Capture(ctx, target, paths.work)
+	if err != nil {
+		return nil, err
+	}
+	defer capture.Close()
+	backupID, err := newBackupID(started)
+	if err != nil {
+		return nil, err
+	}
+	filename := "payload.tar"
+	transformations := make([]manifest.Transformation, 0, 2)
+	var payload io.ReadCloser
+	if target.Compression == nil {
+		payload, err = archivepkg.TarReader(ctx, capture.Path())
+	} else {
+		filename += ".zst"
+		level := target.Compression.Level
+		transformations = append(transformations, manifest.Transformation{Driver: "zstd", Level: &level})
+		payload, err = archivepkg.TarZstdReader(ctx, capture.Path(), level)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer payload.Close()
+	value := manifest.Manifest{
+		FormatVersion: manifest.FormatVersion, BackupID: backupID, Target: targetName,
+		CaptureDriver: "sqlite3", StartedAt: started, CompletedAt: time.Now().UTC(),
+		Tool:     manifest.Tool{Name: "sqlite3", Version: capture.Report.Version},
+		Source:   manifest.Source{ServerVersion: capture.Report.Version, Replication: map[string]string{}},
+		Artifact: manifest.Artifact{Filename: filename}, Transformations: transformations,
+	}
+	staging, err := spool.New(paths.spool)
+	if err != nil {
+		return nil, err
+	}
+	defer staging.Close()
+	var staged *localstore.Set
+	if encryptor == nil {
+		staged, err = staging.Stage(ctx, environment, value, payload)
+	} else {
+		staged, err = staging.StageEncrypted(ctx, environment, value, payload, encryptor)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := staging.Verify(ctx, staged.RelativePath); err != nil {
+		return nil, err
+	}
+	delivered := staged
+	for _, destination := range destinations {
+		switch destination.driver {
+		case "local":
+			delivered, err = staging.DeliverLocal(ctx, staged.RelativePath, destination.local)
+		case "s3":
+			delivered, err = staging.DeliverS3(ctx, staged.RelativePath, destination.s3)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("deliver destination %q: %w; staged backup remains at %s", destination.name, err, staged.RelativePath)
+		}
+	}
+	if err := capture.Close(); err != nil {
+		return nil, err
+	}
+	return delivered, nil
 }
 
 func executeTarRun(
@@ -1516,6 +1668,14 @@ func runDoctor(configPath string, args []string, stdout, stderr io.Writer) (code
 		}
 		fmt.Fprintf(stdout, "target=%s driver=tar status=healthy tool=%s paths=%d\n",
 			targetName, report.Version, report.Paths)
+	case "sqlite3":
+		report, err := sqlite3driver.NewCapturer().Check(ctx, target)
+		if err != nil {
+			fmt.Fprintf(stderr, "savetoa: doctor %q failed: %v\n", targetName, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "target=%s driver=sqlite3 status=healthy tool=%s\n",
+			targetName, report.Version)
 	default:
 		fmt.Fprintf(stderr, "savetoa: doctor does not support driver %q\n", target.Driver)
 		return 1
@@ -1551,5 +1711,5 @@ func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, "  doctor TARGET       validate a target without capturing data")
 	fmt.Fprintln(output, "  version             print build information")
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "MariaDB, MongoDB, Redis, and tar run, S3 delivery, status, retention, restore, and doctor are implemented; other operations fail closed.")
+	fmt.Fprintln(output, "MariaDB, MongoDB, Redis, SQLite, and tar run, S3 delivery, status, retention, restore, and doctor are implemented; other operations fail closed.")
 }

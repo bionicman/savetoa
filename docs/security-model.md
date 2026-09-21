@@ -66,6 +66,15 @@ invokes `/usr/bin/tar` directly with a minimal fixed environment and an option
 terminator. It rejects symlinked roots, overlapping roots, special files, and
 links whose resolved target falls outside all configured roots before capture.
 
+SQLite targets likewise have no credentials or configurable commands. The
+source is one canonical absolute regular file whose path may not traverse a
+symlink. SaveToA invokes `/usr/bin/sqlite3` directly with fixed read-only,
+no-follow, quick-check, and online-backup operations. The destination filename
+is fixed and relative to a private work directory, so configured paths never
+enter SQLite command text. Native output is not copied into errors. Access to
+the database and any live WAL/SHM state must be granted narrowly by deployment
+configuration; package installation grants none.
+
 MongoDB credentials contain only a password in a mode-0600 file. Health checks
 use a direct official-driver connection to the configured member, and native
 capture receives that same file through `mongodump --config`; neither path

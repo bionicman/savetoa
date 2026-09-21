@@ -144,6 +144,21 @@ func TestTarManifestAllowsNoServerOrReplicationMetadata(t *testing.T) {
 	}
 }
 
+func TestSQLite3ManifestRequiresVersionButNotReplicationMetadata(t *testing.T) {
+	value := validManifest()
+	value.Target = "example-sqlite"
+	value.CaptureDriver = "sqlite3"
+	value.Tool = Tool{Name: "sqlite3", Version: "3.46.1"}
+	value.Source = Source{ServerVersion: "3.46.1", Replication: map[string]string{}}
+	if _, err := Marshal(value); err != nil {
+		t.Fatalf("Marshal(SQLite3 manifest) error = %v", err)
+	}
+	value.Source.ServerVersion = ""
+	if _, err := Marshal(value); err == nil || !strings.Contains(err.Error(), "server_version") {
+		t.Fatalf("Marshal(SQLite3 manifest without version) error = %v", err)
+	}
+}
+
 func TestReadRejectsOversizedManifest(t *testing.T) {
 	data := strings.Repeat("x", MaxFileSize+1)
 	_, err := Read(strings.NewReader(data))

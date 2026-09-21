@@ -143,6 +143,24 @@ targets:
 groups: {}
 `
 
+const validSQLite3Config = `
+config_version: 1
+environment: example
+targets:
+  example-sqlite:
+    driver: sqlite3
+    source:
+      path: /var/lib/example/database.sqlite3
+    compression:
+      driver: zstd
+      level: 3
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+groups: {}
+`
+
 func TestParseValidConfiguration(t *testing.T) {
 	parsed, err := Parse([]byte(validConfig))
 	if err != nil {
@@ -237,6 +255,36 @@ func TestTarConfigurationFailsClosed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse([]byte(input)); err == nil {
 				t.Fatal("Parse(unsafe tar) succeeded")
+			}
+		})
+	}
+}
+
+func TestParseValidSQLite3Configuration(t *testing.T) {
+	parsed, err := Parse([]byte(validSQLite3Config))
+	if err != nil {
+		t.Fatalf("Parse(valid SQLite3) error = %v", err)
+	}
+	target := parsed.Targets["example-sqlite"]
+	if target.Driver != "sqlite3" || target.Source.Path != "/var/lib/example/database.sqlite3" {
+		t.Fatalf("SQLite3 target = %#v", target)
+	}
+}
+
+func TestSQLite3ConfigurationFailsClosed(t *testing.T) {
+	tests := map[string]string{
+		"missing path":  strings.Replace(validSQLite3Config, "    source:\n      path: /var/lib/example/database.sqlite3\n", "", 1),
+		"root path":     strings.Replace(validSQLite3Config, "/var/lib/example/database.sqlite3", "/", 1),
+		"relative path": strings.Replace(validSQLite3Config, "/var/lib/example/database.sqlite3", "database.sqlite3", 1),
+		"credentials":   strings.Replace(validSQLite3Config, "    source:\n", "    credentials:\n      file: /etc/savetoa/credentials.d/forbidden\n    source:\n", 1),
+		"paths":         strings.Replace(validSQLite3Config, "      path: /var/lib/example/database.sqlite3", "      path: /var/lib/example/database.sqlite3\n      paths: [/var/lib/example]", 1),
+		"capture args":  strings.Replace(validSQLite3Config, "    compression:\n", "    capture:\n      full: true\n    compression:\n", 1),
+		"unknown field": strings.Replace(validSQLite3Config, "      path: /var/lib/example/database.sqlite3", "      path: /var/lib/example/database.sqlite3\n      immutable: true", 1),
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(input)); err == nil {
+				t.Fatal("Parse(unsafe SQLite3) succeeded")
 			}
 		})
 	}

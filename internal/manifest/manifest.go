@@ -128,7 +128,7 @@ func (manifest Manifest) Validate() error {
 		return fmt.Errorf("target must match %s", targetPattern.String())
 	}
 	switch manifest.CaptureDriver {
-	case "mariadb", "mongodb", "redis", "tar", "garage":
+	case "mariadb", "mongodb", "redis", "sqlite3", "tar", "garage":
 	default:
 		return fmt.Errorf("unsupported capture_driver %q", manifest.CaptureDriver)
 	}

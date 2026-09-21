@@ -54,6 +54,7 @@ type FileReference struct {
 
 type MariaDBSource struct {
 	Paths                  []string           `yaml:"paths,omitempty"`
+	Path                   string             `yaml:"path,omitempty"`
 	Socket                 string             `yaml:"socket,omitempty"`
 	Host                   string             `yaml:"host,omitempty"`
 	Port                   int                `yaml:"port,omitempty"`
@@ -216,6 +217,10 @@ func (target Target) validate() error {
 		if err := target.validateTar(); err != nil {
 			return err
 		}
+	case "sqlite3":
+		if err := target.validateSQLite3(); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unsupported capture driver %q", target.Driver)
 	}
@@ -226,7 +231,7 @@ func (target Target) validateMariaDB() error {
 	if err := target.Credentials.validate("credentials.file"); err != nil {
 		return err
 	}
-	if len(target.Source.Paths) != 0 || target.Source.Host != "" || target.Source.Port != 0 || target.Source.Username != "" || target.Source.AuthenticationDatabase != "" || target.Source.RDBFile != "" ||
+	if len(target.Source.Paths) != 0 || target.Source.Path != "" || target.Source.Host != "" || target.Source.Port != 0 || target.Source.Username != "" || target.Source.AuthenticationDatabase != "" || target.Source.RDBFile != "" ||
 		target.Source.Replica.SetName != "" || target.Source.Replica.RequireSecondary || target.Source.Replica.RequireHidden ||
 		target.Source.Replica.RequireNonVoting || target.Source.Replica.RequirePriorityZero || target.Source.Replica.RequireReadOnly ||
 		target.Capture.Full || target.Capture.Oplog || target.Capture.BGSAVE || target.Capture.Schedule || target.Capture.MaxWait != "" {
@@ -270,7 +275,7 @@ func (target Target) validateMongoDB() error {
 	if err := target.Credentials.validate("credentials.file"); err != nil {
 		return err
 	}
-	if len(target.Source.Paths) != 0 || target.Source.Socket != "" || target.Source.Replica.SourceHost != "" || target.Source.Replica.SourcePort != 0 ||
+	if len(target.Source.Paths) != 0 || target.Source.Path != "" || target.Source.Socket != "" || target.Source.Replica.SourceHost != "" || target.Source.Replica.SourcePort != 0 ||
 		target.Source.Replica.SourceUser != "" || target.Source.Replica.RequireGTID || target.Source.Replica.RequireReadOnly ||
 		target.Source.RDBFile != "" || target.Capture.Prepare || target.Capture.SafeReplicaBackup || target.Capture.UseMemory != "" ||
 		target.Capture.BGSAVE || target.Capture.Schedule || target.Capture.MaxWait != "" {
@@ -309,7 +314,7 @@ func (target Target) validateRedis() error {
 	if err := target.Credentials.validate("credentials.file"); err != nil {
 		return err
 	}
-	if len(target.Source.Paths) != 0 || target.Source.Socket != "" || target.Source.AuthenticationDatabase != "" ||
+	if len(target.Source.Paths) != 0 || target.Source.Path != "" || target.Source.Socket != "" || target.Source.AuthenticationDatabase != "" ||
 		target.Source.Replica.SourceUser != "" || target.Source.Replica.RequireGTID ||
 		target.Source.Replica.SetName != "" || target.Source.Replica.RequireSecondary ||
 		target.Source.Replica.RequireHidden || target.Source.Replica.RequireNonVoting ||
@@ -357,7 +362,7 @@ func (target Target) validateTar() error {
 	if target.Credentials.File != "" {
 		return errors.New("tar target must not contain credentials")
 	}
-	if target.Source.Socket != "" || target.Source.Host != "" || target.Source.Port != 0 ||
+	if target.Source.Path != "" || target.Source.Socket != "" || target.Source.Host != "" || target.Source.Port != 0 ||
 		target.Source.Username != "" || target.Source.AuthenticationDatabase != "" || target.Source.RDBFile != "" ||
 		target.Source.Replica != (MariaDBReplicaGate{}) {
 		return errors.New("tar target contains fields for another driver")
@@ -381,6 +386,21 @@ func (target Target) validateTar() error {
 		}
 	}
 	return nil
+}
+
+func (target Target) validateSQLite3() error {
+	if target.Credentials.File != "" {
+		return errors.New("sqlite3 target must not contain credentials")
+	}
+	if len(target.Source.Paths) != 0 || target.Source.Socket != "" || target.Source.Host != "" || target.Source.Port != 0 ||
+		target.Source.Username != "" || target.Source.AuthenticationDatabase != "" || target.Source.RDBFile != "" ||
+		target.Source.Replica != (MariaDBReplicaGate{}) {
+		return errors.New("sqlite3 target contains fields for another driver")
+	}
+	if target.Capture != (MariaDBCapture{}) {
+		return errors.New("sqlite3 target contains capture options")
+	}
+	return validateAbsolutePath("source.path", target.Source.Path, true)
 }
 
 func (target Target) validateCommon() error {

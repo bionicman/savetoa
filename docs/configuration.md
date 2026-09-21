@@ -21,13 +21,13 @@ duplicate fields are errors at every level. Environment, target, group, and
 destination names use lowercase ASCII letters, digits, `_`, and `-`; they must
 begin with a letter or digit and may contain at most 63 characters.
 
-The implemented target schemas are `mariadb`, `mongodb`, `redis`, and `tar`. MariaDB requires
+The implemented target schemas are `mariadb`, `mongodb`, `redis`, `sqlite3`, and `tar`. MariaDB requires
 an absolute native option-file reference, a local socket, the expected replica
 source host, port and user, mandatory GTID/lag and preparation safety gates,
 and at least one destination. Other capture driver names fail closed until
 their own typed schemas are implemented.
 
-`run` supports MariaDB, MongoDB, Redis, and tar targets with local and S3 destinations. Captures are
+`run` supports MariaDB, MongoDB, Redis, SQLite, and tar targets with local and S3 destinations. Captures are
 staged below `/var/lib/savetoa/spool`, verified, and then delivered to every
 configured destination in destination-name order. A failed delivery leaves the
 completed staged set intact and reports its relative path. Retry that exact set
@@ -75,7 +75,7 @@ encrypted set additionally requires a mode-`0600` X25519 identity file.
 Each target declares:
 
 - `driver`: capture implementation;
-- `credentials`: reference to protected source credentials;
+- `credentials`: reference to protected source credentials when the driver needs them;
 - `source`: endpoint, socket, and topology/health requirements;
 - `capture`: driver-specific capture options;
 - `compression`: optional compression transform;
@@ -147,6 +147,37 @@ and optional age identity as `restore`. It requires matching Redis
 server/CLI versions and loads the RDB in a temporary loopback-only
 `redis-server` with AOF and automatic saves disabled. No live Redis endpoint
 or credentials can be supplied.
+
+SQLite targets require one canonical absolute database path and accept neither
+credentials nor capture options:
+
+```yaml
+driver: sqlite3
+source:
+  path: /var/lib/example/database.sqlite3
+compression:
+  driver: zstd
+  level: 3
+```
+
+At runtime the source must be a regular file, not a symlink, and no component
+of its configured path may traverse a symlink. SaveToA invokes the fixed
+`/usr/bin/sqlite3` executable directly in read-only, no-follow mode. It runs a
+fixed `PRAGMA quick_check`, creates a consistent standalone snapshot through
+SQLite's online backup command, normalizes the snapshot to rollback-journal
+mode, and checks it read-only before the common tar, zstd, age, spool, and
+destination pipeline. The output is named
+`database.sqlite3` inside the payload. Committed WAL contents are incorporated
+by the online backup; `-wal` and `-shm` files are not copied separately.
+For a live WAL-mode source, the execution identity must have the filesystem
+access SQLite requires to open the database and its existing WAL/SHM state;
+those narrowly scoped permissions belong to deployment configuration.
+
+The configured source path is passed only as a native argv element. It never
+enters SQL or dot-command text, and configuration cannot select an executable,
+SQLite flags, SQL, output filename, or shell fragment. The ordinary `restore`
+command safely materializes `database.sqlite3` into a new explicit directory
+without replacing or opening a live application database.
 
 Tar targets require 1 to 128 clean, absolute, non-root paths and do not accept
 credentials or capture options:

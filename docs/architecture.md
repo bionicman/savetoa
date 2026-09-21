@@ -76,7 +76,7 @@ delivery retries never re-encrypt or create a new artifact for the backup ID.
 
 ## Driver interfaces
 
-Implemented capture drivers are `mariadb`, `mongodb`, `redis`, and `tar`.
+Implemented capture drivers are `mariadb`, `mongodb`, `redis`, `sqlite3`, and `tar`.
 Planned later drivers include `garage`. Initial destination drivers are
 `local` and `s3`.
 
@@ -113,6 +113,16 @@ selected tree may only resolve within another selected tree. Stored member
 names are relative to `/`. The completed uncompressed tar is staged in the
 private work directory before the common zstd, age, spool, and destination
 pipeline begins.
+
+SQLite capture opens one explicit database through the native `/usr/bin/sqlite3`
+CLI in read-only, no-follow mode. It runs a fixed `PRAGMA quick_check` before
+capture, uses the CLI's online backup command to create `database.sqlite3` in a
+private work directory, normalizes the snapshot to rollback-journal mode, and
+checks the standalone database read-only before packaging it.
+The output path and SQLite commands are fixed by SaveToA; configuration cannot
+supply SQL, CLI flags, or executable paths. The online backup incorporates
+committed WAL state into the standalone snapshot, so WAL and SHM sidecars are
+not copied as separate artifacts.
 
 ## Artifact format
 

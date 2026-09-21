@@ -169,12 +169,32 @@ targets:
         driver: local
         path: /var/backups/savetoa
 
+  example-sqlite:
+    driver: sqlite3
+
+    source:
+      path: /var/lib/example/database.sqlite3
+
+    compression:
+      driver: zstd
+      level: 3
+
+    encryption:
+      driver: age
+      recipients_file: /etc/savetoa/recipients.d/example.age
+
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+
 groups:
   example-databases:
     targets:
       - example-mariadb
       - example-mongodb
       - example-redis
+      - example-sqlite
   example-filesystems:
     targets:
       - example-files

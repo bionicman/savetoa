@@ -63,12 +63,12 @@ test suite.
 - `started_at` and `completed_at` are RFC 3339 timestamps; completion cannot
   precede capture start.
 - `tool` identifies the native capture utility and its version.
-- `source.server_version` records the captured service version when the source
-  has one; it is empty for the `tar` driver.
+- `source.server_version` records the captured service or SQLite library version;
+  it is empty only for the `tar` driver.
 - `source.replication` contains driver-defined, non-secret replication
-  coordinates. It is required and non-empty for database captures, and keys
-  associated with passwords, tokens, credentials, and private keys are
-  rejected.
+  coordinates. It is non-empty for MariaDB, MongoDB, and Redis captures;
+  SQLite records an empty object. Keys associated with passwords, tokens,
+  credentials, and private keys are rejected.
 - `artifact.filename` is a single path component relative to the backup-set
   directory.
 - `artifact.size_bytes` is the stored artifact size.

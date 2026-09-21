@@ -17,6 +17,8 @@ age encryption, durable staging, and delivery to every configured local or S3 de
 perform equivalent hidden/non-voting SECONDARY gates and capture a full
 `mongodump --archive --oplog`. Redis targets require a read-only,
 priority-zero replica and package a newly completed `BGSAVE SCHEDULE` RDB.
+SQLite targets use the native online backup API through a fixed `sqlite3` CLI
+invocation and validate both the live source and standalone snapshot.
 Tar targets archive explicit filesystem paths with fixed GNU tar arguments;
 compression and encryption remain common transforms rather than tar options.
 `doctor` performs the corresponding topology, lag, persistence, and

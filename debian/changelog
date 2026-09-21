@@ -1,3 +1,9 @@
+savetoa (0.1.0-18) unstable; urgency=medium
+
+  * Add consistent SQLite online-backup capture.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Thu, 10 Sep 2026 13:38:19 +0100
+
 savetoa (0.1.0-17) unstable; urgency=medium
 
   * Add safe GNU tar capture for explicit filesystem paths.

@@ -16,6 +16,7 @@ RUN apt-get update \
         gcc \
         libc6-dev \
         make \
+        sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN case "${TARGETARCH}" in \
