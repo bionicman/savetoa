@@ -76,7 +76,7 @@ delivery retries never re-encrypt or create a new artifact for the backup ID.
 
 ## Driver interfaces
 
-Implemented capture drivers are `mariadb`, `mongodb`, `redis`, `sqlite3`,
+Implemented capture drivers are `mariadb`, `mariadb-dump`, `mongodb`, `redis`, `sqlite3`,
 `postgresql-base`, `postgresql-dump`, and `tar`.
 Planned later drivers include `garage`. Initial destination drivers are
 `local` and `s3`.
@@ -91,6 +91,13 @@ rejected so a misspelled safety option cannot silently fall back to a default.
 Native commands must be launched with `exec.CommandContext`-style argument
 arrays, never through a shell. Credentials use protected files, environment, or
 native secure config mechanisms; they never appear in argv.
+
+MariaDB has separate physical-replica and logical-dump contracts. The
+`mariadb-dump` driver captures exactly one explicitly configured database over
+a local socket with `--single-transaction` and fixed arguments. It writes
+`database.sql` into a private work tree, requires the native completion marker,
+syncs it before packaging, and records the database name in the manifest. It
+does not claim cross-database consistency or include server accounts and grants.
 
 MongoDB capture connects directly to the configured local member. Its health
 gate requires the expected replica-set name, healthy SECONDARY state, bounded

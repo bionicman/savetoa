@@ -111,6 +111,15 @@ rejects symlinks and special files, and only the resulting tar stream enters
 the durable spool. On cancellation or native-tool failure, SaveToA uses a
 separate bounded cleanup context to attempt to resume the replica SQL thread.
 
+MariaDB logical capture accepts only a local socket, one validated database
+name, and a non-empty regular mode-`0600` native option file. The option file is
+the first native argument and its contents are never parsed or logged. Dump
+flags are fixed: configuration cannot supply SQL, executables, arguments, a
+remote host, or multiple databases. Native stderr is discarded. A dump is not
+published unless `mariadb-dump` exits successfully and its regular mode-`0600`
+output ends with the native completion marker. Server accounts and grants are
+outside this single-database contract and remain configuration-management state.
+
 ## Retention
 
 Retention operates only on sets whose completion marker binds a valid

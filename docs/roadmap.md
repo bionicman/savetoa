@@ -20,7 +20,8 @@ Development should proceed through short restore-tested increments.
 14. [x] Add consistent SQLite online-backup capture.
 15. [x] Add PostgreSQL physical standby and single-database logical capture,
     with disposable restore smoke for both formats.
-16. [ ] Design Garage metadata backup and S3-to-S3 migration as separate drivers.
+16. [x] Add single-database MariaDB logical capture with disposable restore smoke.
+17. [ ] Design Garage metadata backup and S3-to-S3 migration as separate drivers.
 
 Full/incremental optimization follows measured data growth. Correct,
 restore-tested full backups are preferable to an early complex incremental

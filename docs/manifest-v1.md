@@ -65,8 +65,8 @@ test suite.
 - `tool` identifies the native capture utility and its version.
 - `source.server_version` records the captured service or SQLite library version;
   it is empty only for the `tar` driver.
-- `source.database` identifies the single database in a `postgresql-dump` set;
-  it is absent for all other drivers.
+- `source.database` identifies the single database in a `mariadb-dump` or
+  `postgresql-dump` set; it is absent for all other drivers.
 - `source.replication` contains driver-defined, non-secret replication
   coordinates. It is non-empty for MariaDB, MongoDB, and Redis captures;
   SQLite and the initial PostgreSQL modes record an empty object. Keys associated with

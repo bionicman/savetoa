@@ -1,3 +1,9 @@
+savetoa (0.1.0-20) unstable; urgency=medium
+
+  * Add single-database MariaDB logical dump capture and restore smoke.
+
+ -- Vadim Rybalko <vadim@bionicman.name>  Fri, 09 Oct 2026 11:40:00 +0100
+
 savetoa (0.1.0-19) unstable; urgency=medium
 
   * Add PostgreSQL standby base-backup and single-database dump capture.

@@ -202,13 +202,17 @@ func (config Config) Validate() error {
 }
 
 func (target Target) validate() error {
-	if target.Driver != "postgresql-base" && target.Driver != "postgresql-dump" &&
+	if target.Driver != "mariadb-dump" && target.Driver != "postgresql-base" && target.Driver != "postgresql-dump" &&
 		(target.Source.Database != "" || target.Source.RequireStandby != nil) {
-		return errors.New("target contains PostgreSQL-only source fields")
+		return errors.New("target contains logical-dump or PostgreSQL-only source fields")
 	}
 	switch target.Driver {
 	case "mariadb":
 		if err := target.validateMariaDB(); err != nil {
+			return err
+		}
+	case "mariadb-dump":
+		if err := target.validateMariaDBDump(); err != nil {
 			return err
 		}
 	case "mongodb":
@@ -235,6 +239,24 @@ func (target Target) validate() error {
 		return fmt.Errorf("unsupported capture driver %q", target.Driver)
 	}
 	return target.validateCommon()
+}
+
+func (target Target) validateMariaDBDump() error {
+	if err := target.Credentials.validate("credentials.file"); err != nil {
+		return err
+	}
+	if len(target.Source.Paths) != 0 || target.Source.Path != "" || target.Source.Host != "" || target.Source.Port != 0 ||
+		target.Source.Username != "" || target.Source.RequireStandby != nil || target.Source.AuthenticationDatabase != "" ||
+		target.Source.RDBFile != "" || target.Source.Replica != (MariaDBReplicaGate{}) || target.Capture != (MariaDBCapture{}) {
+		return errors.New("mariadb-dump target contains fields for another driver")
+	}
+	if err := validateAbsolutePath("source.socket", target.Source.Socket, false); err != nil {
+		return err
+	}
+	if err := validateName("source.database", target.Source.Database); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (target Target) validateMariaDB() error {

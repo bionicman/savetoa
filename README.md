@@ -13,7 +13,11 @@ SaveToA is an early implementation. Strict config and manifest v1 contracts,
 target locking, streaming X25519 `age` encryption, durable spool, and verified
 local storage and idempotent S3 delivery and recovery exist. MariaDB `run` performs replica health gates, physical
 capture, replica-thread recovery, preparation, tar/zstd packaging, optional
-age encryption, durable staging, and delivery to every configured local or S3 destination. MongoDB targets
+age encryption, durable staging, and delivery to every configured local or S3 destination.
+The separate `mariadb-dump` driver captures one explicitly named database from
+a primary or replica with a consistent fixed-argument logical dump; its Docker
+smoke test restores tables, a view, a trigger, a routine, and an event.
+MongoDB targets
 perform equivalent hidden/non-voting SECONDARY gates and capture a full
 `mongodump --archive --oplog`. Redis targets require a read-only,
 priority-zero replica and package a newly completed `BGSAVE SCHEDULE` RDB.
@@ -23,6 +27,8 @@ PostgreSQL targets separately support whole-cluster standby base backups and
 single-database custom-format dumps, each with native archive checks.
 `./scripts/smoke-postgresql.sh` exercises both formats and disposable restores
 using temporary Docker PostgreSQL 18 instances.
+`./scripts/smoke-mariadb-dump.sh` exercises logical MariaDB capture,
+materialization, and disposable restore using a temporary Docker MariaDB.
 Tar targets archive explicit filesystem paths with fixed GNU tar arguments;
 compression and encryption remain common transforms rather than tar options.
 `doctor` performs the corresponding topology, lag, persistence, and

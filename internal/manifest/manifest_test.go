@@ -56,6 +56,21 @@ func TestPostgreSQLManifestModes(t *testing.T) {
 	}
 }
 
+func TestMariaDBDumpManifestRequiresDatabaseWithoutReplication(t *testing.T) {
+	value := validManifest()
+	value.Target = "mailserver"
+	value.CaptureDriver = "mariadb-dump"
+	value.Tool = Tool{Name: "mariadb-dump", Version: "11.8.6"}
+	value.Source = Source{ServerVersion: "11.8.6", Database: "mailserver", Replication: map[string]string{}}
+	if _, err := Marshal(value); err != nil {
+		t.Fatalf("Marshal(MariaDB dump) error=%v", err)
+	}
+	value.Source.Database = ""
+	if _, err := Marshal(value); err == nil || !strings.Contains(err.Error(), "source.database") {
+		t.Fatalf("Marshal(MariaDB dump without database) error=%v", err)
+	}
+}
+
 func TestDocumentedExampleMatchesSchema(t *testing.T) {
 	path := filepath.Join("..", "..", "docs", "manifest-v1.example.json")
 	data, err := os.ReadFile(path)

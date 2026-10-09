@@ -129,7 +129,7 @@ func (manifest Manifest) Validate() error {
 		return fmt.Errorf("target must match %s", targetPattern.String())
 	}
 	switch manifest.CaptureDriver {
-	case "mariadb", "mongodb", "redis", "sqlite3", "postgresql-base", "postgresql-dump", "tar", "garage":
+	case "mariadb", "mariadb-dump", "mongodb", "redis", "sqlite3", "postgresql-base", "postgresql-dump", "tar", "garage":
 	default:
 		return fmt.Errorf("unsupported capture_driver %q", manifest.CaptureDriver)
 	}
@@ -145,12 +145,12 @@ func (manifest Manifest) Validate() error {
 	if manifest.CaptureDriver != "tar" && manifest.Source.ServerVersion == "" {
 		return errors.New("source.server_version is required")
 	}
-	if manifest.CaptureDriver == "postgresql-dump" {
+	if manifest.CaptureDriver == "mariadb-dump" || manifest.CaptureDriver == "postgresql-dump" {
 		if !targetPattern.MatchString(manifest.Source.Database) {
-			return errors.New("source.database is required for postgresql-dump")
+			return errors.New("source.database is required for logical dump captures")
 		}
 	} else if manifest.Source.Database != "" {
-		return errors.New("source.database is only supported for postgresql-dump")
+		return errors.New("source.database is only supported for logical dump captures")
 	}
 	if manifest.Source.Replication == nil {
 		return errors.New("source.replication must be an object")

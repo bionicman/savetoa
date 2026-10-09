@@ -21,7 +21,7 @@ duplicate fields are errors at every level. Environment, target, group, and
 destination names use lowercase ASCII letters, digits, `_`, and `-`; they must
 begin with a letter or digit and may contain at most 63 characters.
 
-The implemented target schemas are `mariadb`, `mongodb`, `redis`, `sqlite3`,
+The implemented target schemas are `mariadb`, `mariadb-dump`, `mongodb`, `redis`, `sqlite3`,
 `postgresql-base`, `postgresql-dump`, and `tar`. MariaDB requires
 an absolute native option-file reference, a local socket, the expected replica
 source host, port and user, mandatory GTID/lag and preparation safety gates,
@@ -102,6 +102,32 @@ MariaDB capture runs `mariadb-backup --backup` with replica metadata and safe
 replica behavior, explicitly attempts to resume the replica SQL thread even
 after cancellation, prepares the captured directory, and refuses to package a
 set without recognized prepared-checkpoint and GTID metadata.
+
+`mariadb-dump` is a separate logical contract for one database on a local
+primary or replica:
+
+```yaml
+driver: mariadb-dump
+credentials:
+  file: /etc/savetoa/credentials.d/application.cnf
+source:
+  socket: /run/mysqld/mysqld.sock
+  database: application
+compression:
+  driver: zstd
+  level: 3
+destinations:
+  local:
+    driver: local
+    path: /var/backups/savetoa
+```
+
+The driver invokes `mariadb-dump` with fixed `--single-transaction`, `--quick`,
+routine, event, trigger, hex-blob, deterministic-date, and UTF-8 options. The
+database name is one validated argument; multiple databases, remote hosts,
+arbitrary flags, and SQL are absent from config v1. The resulting
+`database.sql` is materialized only into a new explicit restore directory.
+`scripts/smoke-mariadb-dump.sh` performs an opt-in disposable server replay.
 
 MongoDB credentials use a protected YAML file containing only the password:
 

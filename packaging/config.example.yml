@@ -52,6 +52,45 @@ targets:
       keep_weekly: 8
       keep_monthly: 12
 
+  example-mariadb-dump:
+    driver: mariadb-dump
+
+    credentials:
+      file: /etc/savetoa/credentials.d/example-mariadb-dump.cnf
+
+    source:
+      socket: /run/mysqld/mysqld.sock
+      database: application
+
+    compression:
+      driver: zstd
+      level: 3
+
+    encryption:
+      driver: age
+      recipients_file: /etc/savetoa/recipients.d/example.age
+
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+
+      offsite:
+        driver: s3
+        credentials:
+          file: /etc/savetoa/credentials.d/offsite-s3.yml
+        maintenance_credentials:
+          file: /etc/savetoa/maintenance-credentials.d/offsite-s3.yml
+        endpoint: https://s3.example.invalid
+        region: eu-west-1
+        bucket: example-backups
+        prefix: databases
+
+    retention:
+      keep_daily: 14
+      keep_weekly: 8
+      keep_monthly: 12
+
   example-mongodb:
     driver: mongodb
 

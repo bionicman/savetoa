@@ -92,6 +92,27 @@ targets:
 groups: {}
 `
 
+const validMariaDBDumpConfig = `
+config_version: 1
+environment: example
+targets:
+  mailserver:
+    driver: mariadb-dump
+    credentials:
+      file: /etc/savetoa/credentials.d/mailserver.cnf
+    source:
+      socket: /run/mysqld/mysqld.sock
+      database: mailserver
+    compression:
+      driver: zstd
+      level: 3
+    destinations:
+      local:
+        driver: local
+        path: /var/backups/savetoa
+groups: {}
+`
+
 const validRedisConfig = `
 config_version: 1
 environment: example
@@ -215,6 +236,34 @@ func TestParseValidMongoDBConfiguration(t *testing.T) {
 	target := parsed.Targets["example-mongodb"]
 	if target.Driver != "mongodb" || target.Source.Replica.SetName != "example-production" || !target.Capture.Oplog {
 		t.Fatalf("MongoDB target = %#v", target)
+	}
+}
+
+func TestParseValidMariaDBDumpConfiguration(t *testing.T) {
+	parsed, err := Parse([]byte(validMariaDBDumpConfig))
+	if err != nil {
+		t.Fatalf("Parse(valid MariaDB dump) error = %v", err)
+	}
+	target := parsed.Targets["mailserver"]
+	if target.Driver != "mariadb-dump" || target.Source.Database != "mailserver" || target.Source.Socket != "/run/mysqld/mysqld.sock" {
+		t.Fatalf("MariaDB dump target = %#v", target)
+	}
+}
+
+func TestMariaDBDumpConfigurationFailsClosed(t *testing.T) {
+	tests := map[string]string{
+		"missing database":   strings.Replace(validMariaDBDumpConfig, "      database: mailserver\n", "", 1),
+		"multiple databases": strings.Replace(validMariaDBDumpConfig, "      database: mailserver", "      database: mailserver\n      databases: [roundcube]", 1),
+		"remote host":        strings.Replace(validMariaDBDumpConfig, "      socket: /run/mysqld/mysqld.sock", "      socket: /run/mysqld/mysqld.sock\n      host: database.example", 1),
+		"capture options":    strings.Replace(validMariaDBDumpConfig, "    compression:", "    capture:\n      prepare: true\n    compression:", 1),
+		"unsafe database":    strings.Replace(validMariaDBDumpConfig, "database: mailserver", "database: ../mailserver", 1),
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(input)); err == nil {
+				t.Fatal("Parse(unsafe MariaDB dump) succeeded")
+			}
+		})
 	}
 }
 

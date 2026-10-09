@@ -19,6 +19,7 @@ import (
 	"github.com/bionicman/savetoa/internal/localstore"
 	"github.com/bionicman/savetoa/internal/manifest"
 	"github.com/bionicman/savetoa/internal/mariadb"
+	"github.com/bionicman/savetoa/internal/mariadbdump"
 	"github.com/bionicman/savetoa/internal/mongodb"
 	"github.com/bionicman/savetoa/internal/postgresql"
 	redisdriver "github.com/bionicman/savetoa/internal/redis"
@@ -744,6 +745,52 @@ func (cliPostgreSQLRunner) Capture(_ context.Context, target config.Target, dire
 	return nil
 }
 func (cliPostgreSQLRunner) Verify(context.Context, config.Target, string) error { return nil }
+
+type cliMariaDBDumpRunner struct{}
+
+func (cliMariaDBDumpRunner) Version(context.Context) (string, error) { return "11.8.6", nil }
+func (cliMariaDBDumpRunner) Probe(context.Context, config.Target) (string, error) {
+	return "11.8.6", nil
+}
+func (cliMariaDBDumpRunner) Capture(_ context.Context, _ config.Target, path string) error {
+	return os.WriteFile(path, []byte("CREATE TABLE smoke (id INT);\n-- Dump completed\n"), 0o600)
+}
+
+func TestExecuteMariaDBDumpRunStagesAndMaterializes(t *testing.T) {
+	root := t.TempDir()
+	paths := runPaths{work: makeDirectory(t, root, "work"), spool: makeDirectory(t, root, "spool"), locks: makeDirectory(t, root, "locks")}
+	destination := makeDirectory(t, root, "destination")
+	credential := filepath.Join(root, "mariadb.cnf")
+	if err := os.WriteFile(credential, []byte("[client]\nuser=backup\npassword=unused\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := config.Target{
+		Driver:      "mariadb-dump",
+		Credentials: config.FileReference{File: credential},
+		Source:      config.MariaDBSource{Socket: "/run/mysqld/mysqld.sock", Database: "mailserver"},
+		Compression: &config.Compression{Driver: "zstd", Level: 3},
+		Destinations: map[string]config.Destination{
+			"local": {Driver: "local", Path: destination},
+		},
+	}
+	set, err := executeMariaDBDumpRun(context.Background(), "test", "mailserver", target, paths, mariadbdump.NewCapturerWithRunner(cliMariaDBDumpRunner{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.Manifest.CaptureDriver != "mariadb-dump" || set.Manifest.Tool.Name != "mariadb-dump" ||
+		set.Manifest.Source.ServerVersion != "11.8.6" || set.Manifest.Source.Database != "mailserver" ||
+		len(set.Manifest.Source.Replication) != 0 {
+		t.Fatalf("manifest=%#v", set.Manifest)
+	}
+	restored := filepath.Join(root, "restored")
+	if _, err := restore.Materialize(context.Background(), restore.Options{SourceRoot: destination, BackupID: set.Manifest.BackupID, TargetDir: restored}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(restored, "database.sql"))
+	if err != nil || !strings.HasSuffix(string(data), "\n-- Dump completed\n") {
+		t.Fatalf("materialized dump=%q error=%v", data, err)
+	}
+}
 
 func TestExecutePostgreSQLRunStagesBothFormats(t *testing.T) {
 	for _, driver := range []string{"postgresql-base", "postgresql-dump"} {

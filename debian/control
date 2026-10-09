@@ -18,6 +18,7 @@ Depends:
  ca-certificates,
  ${misc:Depends},
 Suggests:
+ mariadb-client,
  mariadb-backup,
  mongodb-database-tools,
  mongodb-org-server,

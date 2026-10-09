@@ -14,7 +14,7 @@ SaveToA coordinates named backup targets. A target selects a capture driver,
 source settings and credentials, transformations, destinations, and retention
 policy.
 .PP
-This release implements physical MariaDB, full+oplog MongoDB, fresh-RDB Redis,
+This release implements physical and single-database logical MariaDB, full+oplog MongoDB, fresh-RDB Redis,
 consistent SQLite online backup, PostgreSQL standby base backup and database dump,
 and explicit-path GNU tar capture, verified local storage,
 idempotent S3 delivery and recovery, repository status reporting,
@@ -33,7 +33,7 @@ Print version information and exit.
 .SH COMMANDS
 .TP
 .BI run " target"
-Capture and deliver one configured MariaDB, MongoDB, Redis, SQLite, PostgreSQL, or tar target to its local and S3 destinations.
+Capture and deliver one configured MariaDB physical or logical, MongoDB, Redis, SQLite, PostgreSQL, or tar target to its local and S3 destinations.
 The command performs driver-specific replica health checks and capture,
 optional zstd and age transforms, durable staging, and destination verification.
 .TP

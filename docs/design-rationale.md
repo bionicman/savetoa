@@ -11,6 +11,8 @@ one deployment.
   transforms, destinations, and retention policy. A driver is not a target.
 - Native database tools perform capture and restore; SaveToA validates source
   health and coordinates the surrounding workflow.
+- Physical replica capture and logical single-database dumps are distinct
+  drivers because their consistency, privilege, and restore contracts differ.
 - Systemd owns scheduling and supervision. Configuration management owns
   target files, secrets, host permissions, schedules, and alert wiring.
 - Shell orchestration is not the engine because the workflow needs explicit
