@@ -75,10 +75,18 @@ extract_backup_id() {
 docker image inspect postgres:18 >/dev/null 2>&1 || docker pull postgres:18 >/dev/null
 docker_arch="$(docker image inspect postgres:18 --format '{{.Architecture}}')"
 case "$docker_arch" in amd64|arm64) ;; *) printf 'Unsupported Docker architecture: %s\n' "$docker_arch" >&2; exit 1 ;; esac
-(
-  cd "$repo_root"
-  GOOS=linux GOARCH="$docker_arch" CGO_ENABLED=0 go build -trimpath -o "$smoke_root/savetoa" ./cmd/savetoa
-)
+if [[ -n "${SAVETOA_SMOKE_BINARY:-}" ]]; then
+  if [[ ! -f "$SAVETOA_SMOKE_BINARY" || ! -x "$SAVETOA_SMOKE_BINARY" ]]; then
+    printf 'SAVETOA_SMOKE_BINARY must name an executable regular file\n' >&2
+    exit 1
+  fi
+  cp "$SAVETOA_SMOKE_BINARY" "$smoke_root/savetoa"
+else
+  (
+    cd "$repo_root"
+    GOOS=linux GOARCH="$docker_arch" CGO_ENABLED=0 go build -trimpath -o "$smoke_root/savetoa" ./cmd/savetoa
+  )
+fi
 mkdir "$smoke_root/destination"
 printf '127.0.0.1:5432:*:postgres:smoke-only-unused\n' > "$smoke_root/pgpass"
 chmod 0600 "$smoke_root/pgpass"
