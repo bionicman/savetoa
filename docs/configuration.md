@@ -300,7 +300,8 @@ age encryption remain common transforms outside the tar driver.
 Config v1 currently accepts `zstd` compression and `age` recipient-file
 encryption. Local destinations require a clean absolute path other than `/`.
 S3 destinations require a separate credential-file reference, an HTTPS origin
-without URL credentials or a path, an explicit lowercase signing region, a
+or an HTTP origin on a loopback host, without URL credentials or a path, an
+explicit lowercase signing region, a
 DNS-compatible bucket, and an optional clean relative object-key prefix. The
 regular, non-symlink credentials file must have mode `0600` and this strict
 shape:
