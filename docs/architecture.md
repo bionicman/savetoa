@@ -78,8 +78,10 @@ delivery retries never re-encrypt or create a new artifact for the backup ID.
 
 Implemented capture drivers are `mariadb`, `mariadb-dump`, `mongodb`, `redis`, `sqlite3`,
 `postgresql-base`, `postgresql-dump`, and `tar`.
-Planned later drivers include `garage`. Initial destination drivers are
-`local` and `s3`.
+Planned later capture drivers include `garage-metadata`. Generic store
+migration is a separate workflow, not a capture driver or destination. See
+[Garage metadata and store migration](garage-and-store-migration.md) for the
+design boundary. Initial destination drivers are `local` and `s3`.
 
 S3 endpoints require HTTPS. Plain HTTP is accepted only for an origin whose
 host is the loopback-only `localhost`, `127.0.0.0/8`, or `::1`; this supports a

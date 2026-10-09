@@ -21,7 +21,11 @@ Development should proceed through short restore-tested increments.
 15. [x] Add PostgreSQL physical standby and single-database logical capture,
     with disposable restore smoke for both formats.
 16. [x] Add single-database MariaDB logical capture with disposable restore smoke.
-17. [ ] Design Garage metadata backup and S3-to-S3 migration as separate drivers.
+17. [x] Design Garage metadata backup and generic disk/S3 store migration as
+    separate workflows, without claiming a live whole-store snapshot.
+18. [ ] Implement and restore-test Garage metadata snapshot capture.
+19. [ ] Implement resumable store migration, starting with disk-to-disk and
+    extending to disk-to-S3 and S3-to-S3.
 
 Full/incremental optimization follows measured data growth. Correct,
 restore-tested full backups are preferable to an early complex incremental
